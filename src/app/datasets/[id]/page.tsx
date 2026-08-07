@@ -5,7 +5,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { Pagination } from "@/components/Pagination";
 import { StatusBadge } from "@/components/StatusBadge";
 import { callDataset } from "@/lib/kra/client";
-import { DEFAULT_MEET, getDataset } from "@/lib/kra/datasets";
+import { DEFAULT_MEET, getDataset, parsePageNo } from "@/lib/kra/datasets";
 
 // 매 요청마다 API 를 호출해 현재 상태를 보여준다. 정적 생성하지 않는다.
 export const dynamic = "force-dynamic";
@@ -23,7 +23,7 @@ export default async function DatasetPage({
   const dataset = getDataset(id);
   if (!dataset) notFound();
 
-  const pageNo = Math.max(1, Number(page ?? "1") || 1);
+  const pageNo = parsePageNo(page);
   const meetCode = meet && dataset.meetCodes[meet] ? meet : DEFAULT_MEET;
   const numOfRows = 50;
 

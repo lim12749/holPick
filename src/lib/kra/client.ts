@@ -4,7 +4,12 @@
  * 이 모듈은 Server Component / Server Action 에서만 import 한다.
  * 인증키가 브라우저 번들에 들어가면 안 되므로 클라이언트 컴포넌트에서 부르지 말 것.
  * (이 파일 어디에도 클라이언트 지시어를 넣어서는 안 된다.)
+ *
+ * 아래 "server-only" import 가 이 규칙을 빌드 타임에 강제한다. 주석만으로는
+ * 실수를 막지 못하고, 클라이언트에서 부르면 키가 undefined 가 되어 원인 불명의
+ * "인증키 미설정" 으로 나타난다.
  */
+import "server-only";
 
 import { getDataset, type KraDataset } from "./datasets";
 import type { KraResult, KraRow, KraStatus } from "./types";
@@ -103,6 +108,22 @@ function mapErrorCode(code: string): ErrorMapping {
   return { status: "api_error", message: `API 오류: ${code}`, hint: undefined };
 }
 
+/**
+ * 성공을 뜻하는 코드인지 판별한다.
+ *
+ * 성공 판정이 여러 곳에 흩어지면 정상 응답을 오류로 뒤집는 사고가 난다.
+ * 실제로 data.go.kr 은 데이터셋마다 `00`, `0`, `INFO-000`, `NORMAL SERVICE.` 등
+ * 서로 다른 표기를 쓰므로 판정은 반드시 이 함수 하나만 거치게 한다.
+ */
+function isSuccessCode(code: string | null | undefined): boolean {
+  if (code == null) return false;
+  const c = code.trim().toUpperCase();
+  if (c === "") return false;
+  if (/NORMAL/.test(c)) return true;
+  // 00, 0, INFO-0, INFO-00, INFO-000 … 숫자 부분이 전부 0이면 성공이다.
+  return /^(INFO-)?0+$/.test(c);
+}
+
 /** XML 오류 응답에서 코드를 뽑아낸다. 게이트웨이 오류는 XML 로만 내려온다. */
 function extractXmlCode(text: string): string | null {
   const patterns = [
@@ -125,16 +146,44 @@ function toNumber(v: unknown): number | null {
   return null;
 }
 
-/** items.item 은 행이 1개면 객체, 여러 개면 배열로 내려온다. 항상 배열로 맞춘다. */
+/** 객체가 아닌 값(빈 문자열 등)은 행이 아니다. 유령 행이 표에 뜨는 것을 막는다. */
+function isRow(v: unknown): v is KraRow {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+/**
+ * items.item 은 행이 1개면 객체, 여러 개면 배열로 내려온다. 항상 배열로 맞춘다.
+ * 데이터가 없을 때 `items: ""` 또는 `items: { item: "" }` 로 오는 경우가 있어
+ * 두 형태 모두 빈 배열로 처리한다.
+ */
 function normalizeRows(items: unknown): KraRow[] {
   if (items == null) return [];
-  if (Array.isArray(items)) return items as KraRow[];
-  if (typeof items === "object") {
-    const item = (items as Record<string, unknown>).item;
+  if (Array.isArray(items)) return items.filter(isRow);
+  if (isRow(items)) {
+    const item = items.item;
     if (item == null) return [];
-    return Array.isArray(item) ? (item as KraRow[]) : [item as KraRow];
+    return Array.isArray(item) ? item.filter(isRow) : isRow(item) ? [item] : [];
   }
   return [];
+}
+
+/**
+ * 환경변수를 읽는다. 값이 빈 문자열이면 미설정으로 본다.
+ *
+ * `process.env.X ?? 기본값` 은 `X=` 를 잡지 못하고, `Number("")` 는 0 이 된다.
+ * 이 프로젝트는 미설정을 빈 값으로 표기하는 관례라(.env.example 의 `KRA_EP_*=`)
+ * 그대로 두면 KRA_TIMEOUT_MS= 하나로 전 데이터셋이 즉시 타임아웃된다.
+ */
+function envStr(name: string, fallback: string): string {
+  const v = process.env[name]?.trim();
+  return v ? v : fallback;
+}
+
+function envInt(name: string, fallback: number): number {
+  const v = process.env[name]?.trim();
+  if (!v) return fallback;
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
 export interface CallOptions {
@@ -143,6 +192,14 @@ export interface CallOptions {
   numOfRows?: number;
   /** 데이터셋별 추가 조회 조건 (hr_name, rc_date 등). */
   extra?: Record<string, string>;
+  /**
+   * 응답을 이 초 동안 재사용한다. 생략하면 캐시하지 않는다.
+   *
+   * 일일 호출 한도(KRA_DAILY_QUOTA)가 있으므로 매 방문마다 전 데이터셋을
+   * 조회하는 화면은 반드시 이 값을 준다. 진단 화면처럼 현재 상태를 그대로
+   * 봐야 하는 곳만 생략한다.
+   */
+  revalidateSeconds?: number;
 }
 
 function emptyResult(status: KraStatus, message: string, hint?: string): KraResult {
@@ -193,9 +250,9 @@ export async function callDataset(dataset: KraDataset, opts: CallOptions = {}): 
 
   const params: Record<string, string> = {
     pageNo: String(opts.pageNo ?? 1),
-    numOfRows: String(opts.numOfRows ?? Number(process.env.KRA_NUM_OF_ROWS ?? 100)),
-    _type: process.env.KRA_RESPONSE_TYPE ?? "json",
-    meet: opts.meet ?? process.env.KRA_DEFAULT_MEET ?? "1",
+    numOfRows: String(opts.numOfRows ?? envInt("KRA_NUM_OF_ROWS", 100)),
+    _type: envStr("KRA_RESPONSE_TYPE", "json"),
+    meet: opts.meet ?? envStr("KRA_DEFAULT_MEET", "1"),
     ...dataset.extraParams,
     ...opts.extra,
   };
@@ -205,7 +262,7 @@ export async function callDataset(dataset: KraDataset, opts: CallOptions = {}): 
     `?serviceKey=${encodeServiceKey(key)}&${new URLSearchParams(params).toString()}`;
   const maskedUrl = maskKey(url);
 
-  const timeoutMs = Number(process.env.KRA_TIMEOUT_MS ?? 10000);
+  const timeoutMs = envInt("KRA_TIMEOUT_MS", 10000);
   const startedAt = Date.now();
 
   let httpCode: number | null = null;
@@ -213,8 +270,11 @@ export async function callDataset(dataset: KraDataset, opts: CallOptions = {}): 
   try {
     const res = await fetch(url, {
       signal: AbortSignal.timeout(timeoutMs),
-      // 진단·탐색 화면은 항상 현재 상태를 봐야 하므로 캐시하지 않는다.
-      cache: "no-store",
+      // 기본은 캐시 없음(진단·탐색은 현재 상태를 봐야 한다).
+      // revalidateSeconds 를 준 화면만 한도 절약을 위해 응답을 재사용한다.
+      ...(opts.revalidateSeconds != null
+        ? { next: { revalidate: opts.revalidateSeconds } }
+        : { cache: "no-store" as const }),
     });
     httpCode = res.status;
     text = await res.text();
@@ -254,7 +314,9 @@ export async function callDataset(dataset: KraDataset, opts: CallOptions = {}): 
   const trimmed = text.trimStart();
   if (trimmed.startsWith("<")) {
     const code = extractXmlCode(text);
-    if (code && !/NORMAL/i.test(code)) {
+    // 성공 코드(00 / INFO-000 / NORMAL SERVICE.)를 오류로 뒤집지 않도록 반드시
+    // isSuccessCode 로만 판정한다. XML 자체는 파싱하지 않으므로 아래 안내로 떨어진다.
+    if (code && !isSuccessCode(code)) {
       const mapped = mapErrorCode(code);
       return { ...emptyResult(mapped.status, mapped.message, mapped.hint), code, httpCode, elapsedMs, maskedUrl };
     }
@@ -289,28 +351,49 @@ export async function callDataset(dataset: KraDataset, opts: CallOptions = {}): 
   const body = response?.body as Record<string, unknown> | undefined;
 
   const resultCode = header?.resultCode != null ? String(header.resultCode) : null;
-  if (resultCode && resultCode !== "00" && resultCode !== "0") {
-    const mapped = mapErrorCode(String(header?.resultMsg ?? resultCode));
+  const resultMsg = header?.resultMsg != null ? String(header.resultMsg) : null;
+  // 코드와 메시지 어느 쪽이든 성공을 뜻하면 성공이다. 둘 다 성공이 아닐 때만 오류로 본다.
+  if (resultCode && !isSuccessCode(resultCode) && !isSuccessCode(resultMsg)) {
+    const mapped = mapErrorCode(resultMsg ?? resultCode);
     return { ...emptyResult(mapped.status, mapped.message, mapped.hint), code: resultCode, httpCode, elapsedMs, maskedUrl };
   }
 
   const rows = normalizeRows(body?.items);
   const totalCount = toNumber(body?.totalCount);
+  const pageNo = toNumber(body?.pageNo);
+
+  // 행이 없어도 totalCount 가 0보다 크면 "결과 없음"이 아니라 "이 페이지에 행이 없음"이다.
+  // 이를 구분하지 않으면 마지막 페이지를 넘겼을 때 표와 페이지 이동이 함께 사라져
+  // 돌아갈 링크조차 없는 막다른 길이 된다.
+  const emptyPage = rows.length === 0 && totalCount != null && totalCount > 0;
 
   return {
-    status: rows.length === 0 ? "no_data" : "ok",
-    message: rows.length === 0 ? "조건에 맞는 데이터가 없습니다." : "정상",
+    status: rows.length === 0 && !emptyPage ? "no_data" : "ok",
+    message:
+      rows.length === 0
+        ? emptyPage
+          ? "이 페이지에는 행이 없습니다. 이전 페이지로 돌아가세요."
+          : "조건에 맞는 데이터가 없습니다."
+        : "정상",
     httpCode,
     elapsedMs,
     totalCount,
-    pageNo: toNumber(body?.pageNo),
+    pageNo,
     numOfRows: toNumber(body?.numOfRows),
     rows,
     maskedUrl,
   };
 }
 
-/** 진단용 — 데이터셋 하나를 1건만 조회해서 연결 상태를 본다. */
-export async function probeDataset(dataset: KraDataset): Promise<KraResult> {
-  return callDataset(dataset, { numOfRows: 1 });
+/**
+ * 진단용 — 데이터셋 하나를 1건만 조회해서 연결 상태를 본다.
+ *
+ * 9개 데이터셋을 한 화면에서 모두 확인하므로 방문 1회당 호출 9회가 나간다.
+ * 일일 한도를 태우지 않도록, 실시간이 필요 없는 화면은 revalidateSeconds 를 준다.
+ */
+export async function probeDataset(
+  dataset: KraDataset,
+  revalidateSeconds?: number,
+): Promise<KraResult> {
+  return callDataset(dataset, { numOfRows: 1, revalidateSeconds });
 }

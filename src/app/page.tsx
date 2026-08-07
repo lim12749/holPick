@@ -3,11 +3,16 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { probeDataset } from "@/lib/kra/client";
 import { DATASETS } from "@/lib/kra/datasets";
 
-export const dynamic = "force-dynamic";
+/**
+ * 홈은 상태 "요약"이라 실시간일 필요가 없다.
+ * 매 방문마다 9개 데이터셋을 조회하면 일일 한도(KRA_DAILY_QUOTA)가 새로고침만으로
+ * 고갈되므로 5분간 재사용한다. 지금 상태를 그대로 봐야 할 때는 /diagnostics 로 간다.
+ */
+export const revalidate = 300;
 
 export default async function HomePage() {
   const results = await Promise.all(
-    DATASETS.map(async (dataset) => ({ dataset, result: await probeDataset(dataset) })),
+    DATASETS.map(async (dataset) => ({ dataset, result: await probeDataset(dataset, 300) })),
   );
   const okCount = results.filter((r) => r.result.status === "ok").length;
 

@@ -19,7 +19,11 @@ async function probe(path) {
   const url = `${BASE}/${path.replace(/^\/+/, "")}?pageNo=1&numOfRows=1&_type=json&meet=1`;
   try {
     const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
-    return { path, code: res.status, exists: res.status === 401 };
+    const body = await res.text();
+    // 게이트웨이가 401 대신 200 + XML 로 SERVICE_KEY_IS_NULL 을 돌려주는 경우가 있어
+    // 상태코드만 보면 존재하는 경로를 통째로 놓친다. 본문도 함께 판정한다.
+    const keyComplaint = /SERVICE_KEY_IS_NULL|SERVICE_KEY_IS_NOT_REGISTERED/i.test(body);
+    return { path, code: res.status, exists: res.status === 401 || keyComplaint };
   } catch {
     return { path, code: null, exists: false, error: true };
   }
@@ -31,8 +35,13 @@ async function main() {
 
   const fileIdx = args.indexOf("--file");
   if (fileIdx !== -1) {
+    const filePath = args[fileIdx + 1];
+    if (!filePath) {
+      console.error("--file 뒤에 목록 파일 경로가 필요합니다.");
+      process.exit(1);
+    }
     const { readFile } = await import("node:fs/promises");
-    const text = await readFile(args[fileIdx + 1], "utf8");
+    const text = await readFile(filePath, "utf8");
     candidates = text
       .split("\n")
       .map((l) => l.trim())
@@ -58,4 +67,7 @@ async function main() {
   for (const h of hits) console.log(`  ${h}`);
 }
 
-main();
+main().catch((err) => {
+  console.error(err instanceof Error ? err.message : String(err));
+  process.exit(1);
+});

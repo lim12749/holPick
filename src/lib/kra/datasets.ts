@@ -167,3 +167,20 @@ export function getDataset(id: string): KraDataset | undefined {
 
 /** 이 프로젝트의 기본 대상 경마장. 모든 데이터셋에서 1 = 서울로 동일하다. */
 export const DEFAULT_MEET = "1";
+
+/** 검색어 최대 길이. 초장문 요청 URL 생성을 막는다. */
+export const MAX_QUERY_LENGTH = 50;
+
+/**
+ * URL 쿼리의 page 값을 정수 페이지 번호로 정규화한다.
+ *
+ * `Number()` 만 쓰면 `?page=2.5` 나 `?page=1e9` 가 그대로 API 로 나간다.
+ * meet 을 화이트리스트로 검증하듯 page 도 범위를 강제한다.
+ */
+export const MAX_PAGE = 10_000;
+
+export function parsePageNo(raw: string | undefined): number {
+  const n = Math.floor(Number(raw ?? "1"));
+  if (!Number.isFinite(n) || n < 1) return 1;
+  return Math.min(n, MAX_PAGE);
+}

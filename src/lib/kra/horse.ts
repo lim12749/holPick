@@ -51,8 +51,15 @@ function str(v: unknown): string {
   return s;
 }
 
+/**
+ * 비율을 계산한다. 출주 0회(데뷔 전)면 null.
+ *
+ * 응답이 불일치해 착순 합이 출주 수를 넘으면 "120.0%" 같은 값이 그대로 화면에
+ * 나가므로 1로 자른다. 지표를 조용히 왜곡시키는 것보다 상한이 낫다.
+ */
 function rate(part: number, total: number): number | null {
-  return total > 0 ? part / total : null;
+  if (total <= 0) return null;
+  return Math.min(part / total, 1);
 }
 
 function buildStats(starts: number, first: number, second: number, third: number): Record0Stats {
@@ -73,11 +80,24 @@ export function formatBirthday(raw: string): string {
   return m ? `${m[1]}-${m[2]}-${m[3]}` : raw;
 }
 
-/** 경마에서 연령은 출생연도 기준으로 센다. */
-function ageFromBirthday(raw: string): number | null {
+/**
+ * 경마에서 연령은 출생연도 기준으로 센다.
+ *
+ * 기준 연도를 인자로 받는다. 서버 타임존에 따라 연말·연초에 값이 1 어긋나는 것을
+ * 막고, 테스트에서 고정할 수 있게 하기 위함이다.
+ */
+function ageFromBirthday(raw: string, currentYear: number): number | null {
   const year = Number(raw.slice(0, 4));
   if (!Number.isFinite(year) || year < 1900) return null;
-  return new Date().getFullYear() - year;
+  const age = currentYear - year;
+  return age >= 0 ? age : null;
+}
+
+/** 한국 경마 기준이므로 연도는 KST(UTC+9)로 판단한다. */
+function currentYearKst(): number {
+  return Number(
+    new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul", year: "numeric" }).format(new Date()),
+  );
 }
 
 export function parseHorse(row: KraRow): Horse {
@@ -90,7 +110,7 @@ export function parseHorse(row: KraRow): Horse {
     sex: str(row.sex),
     origin: str(row.name),
     birthday: birthday || null,
-    age: birthday ? ageFromBirthday(birthday) : null,
+    age: birthday ? ageFromBirthday(birthday, currentYearKst()) : null,
     trName: str(row.trName),
     trNo: str(row.trNo),
     owName: str(row.owName),

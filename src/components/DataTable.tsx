@@ -45,8 +45,13 @@ export function DataTable({
   const columns = deriveColumns(rows, preferredColumns);
 
   return (
-    /* 넓은 표는 페이지 전체가 아니라 이 컨테이너 안에서만 가로 스크롤된다. */
-    <div className="overflow-x-auto rounded-lg border border-border">
+    /*
+     * 넓은 표는 페이지 전체가 아니라 이 컨테이너 안에서만 가로 스크롤된다.
+     * sticky 헤더가 동작하려면 이 컨테이너가 세로로도 스크롤돼야 한다 —
+     * overflow-x 만 주면 컨테이너가 sticky 기준 스크롤포트가 되면서
+     * 세로 스크롤이 없어 top:0 이 아무 효과도 내지 못한다.
+     */
+    <div className="max-h-[70vh] overflow-auto rounded-lg border border-border">
       <table className="w-full border-collapse text-sm">
         {caption && <caption className="sr-only">{caption}</caption>}
         <thead>

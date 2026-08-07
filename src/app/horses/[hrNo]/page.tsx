@@ -79,8 +79,10 @@ export default async function HorseDetailPage({ params }: { params: Promise<{ hr
     );
   }
 
-  // hr_no 필터가 적용되지 않는 경우를 대비해 응답 안에서 한 번 더 골라낸다.
-  const row = result.rows.find((r) => String(r.hrNo ?? "").trim() === hrNo) ?? result.rows[0];
+  // hr_no 필터가 무시되면 응답은 전체 목록이 된다. 그때 첫 행으로 대체하면
+  // 요청한 마번 URL 아래에 **다른 말의 데이터**가 아무 경고 없이 표시된다.
+  // 데이터가 없는 것보다 틀린 데이터를 보여주는 쪽이 나쁘므로 반드시 404 로 보낸다.
+  const row = result.rows.find((r) => String(r.hrNo ?? "").trim() === hrNo);
   if (!row) notFound();
 
   const horse = parseHorse(row);

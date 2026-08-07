@@ -3,6 +3,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { Pagination } from "@/components/Pagination";
 import { StatusBadge } from "@/components/StatusBadge";
 import { callKra } from "@/lib/kra/client";
+import { MAX_QUERY_LENGTH, parsePageNo } from "@/lib/kra/datasets";
 import { formatPrize, formatRate, parseHorse } from "@/lib/kra/horse";
 
 export const dynamic = "force-dynamic";
@@ -19,8 +20,8 @@ export default async function HorsesPage({
   searchParams: Promise<{ page?: string; q?: string }>;
 }) {
   const { page, q } = await searchParams;
-  const pageNo = Math.max(1, Number(page ?? "1") || 1);
-  const query = (q ?? "").trim();
+  const pageNo = parsePageNo(page);
+  const query = (q ?? "").trim().slice(0, MAX_QUERY_LENGTH);
 
   const result = await callKra("horse-detail", {
     pageNo,
@@ -51,6 +52,7 @@ export default async function HorsesPage({
           defaultValue={query}
           placeholder="마명으로 검색"
           aria-label="마명 검색"
+          maxLength={MAX_QUERY_LENGTH}
           className="min-w-56 flex-1 rounded-md border border-border bg-surface px-3 py-2 text-sm outline-none focus:border-accent"
         />
         <button
@@ -95,7 +97,8 @@ export default async function HorsesPage({
         </div>
       ) : (
         <>
-          <div className="overflow-x-auto rounded-lg border border-border">
+          {/* sticky 헤더가 동작하도록 세로 스크롤도 이 컨테이너가 맡는다. DataTable 과 동일. */}
+          <div className="max-h-[70vh] overflow-auto rounded-lg border border-border">
             <table className="w-full border-collapse text-sm">
               <thead>
                 <tr className="bg-surface-muted">
