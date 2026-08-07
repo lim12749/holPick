@@ -28,14 +28,31 @@ export const MEET_SWAPPED: MeetCodes = {
   "3": "부산경남",
 };
 
+/** 출전표 상세정보는 영천까지 포함한다 (Swagger 원문 확인). */
+export const MEET_WITH_YEONGCHEON: MeetCodes = {
+  "1": "서울",
+  "2": "제주",
+  "3": "부산경남",
+  "4": "영천",
+};
+
 export interface KraDataset {
   id: string;
   /** 화면에 표시할 한글명. */
   label: string;
   /** 한 줄 설명. */
   description: string;
-  /** 이 데이터셋의 엔드포인트가 담긴 환경변수 이름. */
+  /** 이 데이터셋의 엔드포인트가 담긴 환경변수 이름. 설정 시 defaultPath 를 덮어쓴다. */
   envKey: string;
+  /**
+   * base URL 뒤에 붙는 검증된 경로 (`API번호/오퍼레이션명`).
+   *
+   * 공개된 안정적인 사실이지 비밀값이 아니므로 코드에 둔다. 값을 찾은 방법은
+   * `scripts/fetch-endpoints.mjs` 참고 — 포털 페이지에 박힌 Swagger 명세에서
+   * host(API 번호)와 paths(오퍼레이션명)를 뽑는다.
+   * 마사회가 경로를 바꾸면 .env 로 임시 오버라이드할 수 있다.
+   */
+  defaultPath: string;
   /** base URL 환경변수 이름. AI 학습용만 별도 base 를 쓴다. */
   baseEnvKey: "KRA_API_BASE_URL" | "KRA_AI_BASE_URL";
   /** 공공데이터포털 상세 페이지. 진단 실패 시 안내 링크로 쓴다. */
@@ -55,6 +72,7 @@ export const DATASETS: KraDataset[] = [
     label: "경주마 상세정보",
     description: "마명·등급·산지·조교사·마주·부모마, 통산 및 최근 1년 성적, 레이팅",
     envKey: "KRA_EP_HORSE_DETAIL",
+    defaultPath: "API8_2/raceHorseInfo_2",
     baseEnvKey: "KRA_API_BASE_URL",
     portalUrl: "https://www.data.go.kr/data/15058115/openapi.do",
     group: "race",
@@ -81,10 +99,12 @@ export const DATASETS: KraDataset[] = [
     label: "출전표 상세정보",
     description: "경주일자·경주번호별 출전마, 부담중량, 레이팅, 기수, 조교사",
     envKey: "KRA_EP_ENTRY_LIST",
+    defaultPath: "API26_2/entrySheet_2",
     baseEnvKey: "KRA_API_BASE_URL",
     portalUrl: "https://www.data.go.kr/data/15058677/openapi.do",
     group: "race",
-    meetCodes: MEET_STANDARD,
+    // Swagger 원문: "경마장번호(1:서울, 2:제주, 3:부산경남, 4:영천)" — 표준과 2·3이 반대이고 영천이 있다.
+    meetCodes: MEET_WITH_YEONGCHEON,
     preferredColumns: ["rcDate", "rcNo", "chulNo", "hrName", "wgBudam", "rating", "jkName", "trName"],
   },
   {
@@ -92,6 +112,7 @@ export const DATASETS: KraDataset[] = [
     label: "경주기록 정보",
     description: "시행이 끝난 경주의 기록",
     envKey: "KRA_EP_RACE_RESULT",
+    defaultPath: "API4_3/raceResult_3",
     baseEnvKey: "KRA_API_BASE_URL",
     portalUrl: "https://www.data.go.kr/data/15058305/openapi.do",
     group: "race",
@@ -103,6 +124,7 @@ export const DATASETS: KraDataset[] = [
     label: "경주마 성적 정보",
     description: "데뷔일, 최근 출전일, 통산 전적, 최근 1년 통계",
     envKey: "KRA_EP_HORSE_RECORD",
+    defaultPath: "API15_2/raceHorseResult_2",
     baseEnvKey: "KRA_API_BASE_URL",
     portalUrl: "https://www.data.go.kr/data/15058779/openapi.do",
     group: "race",
@@ -114,6 +136,7 @@ export const DATASETS: KraDataset[] = [
     label: "경주마 레이팅 정보",
     description: "경주마 레이팅 1~4",
     envKey: "KRA_EP_HORSE_RATING",
+    defaultPath: "API77/raceHorseRating",
     baseEnvKey: "KRA_API_BASE_URL",
     portalUrl: "https://www.data.go.kr/data/15057323/openapi.do",
     group: "race",
@@ -125,6 +148,7 @@ export const DATASETS: KraDataset[] = [
     label: "기수 성적 정보",
     description: "현역 기수의 누적 경주성적",
     envKey: "KRA_EP_JOCKEY_RECORD",
+    defaultPath: "API11_1/jockeyResult_1",
     baseEnvKey: "KRA_API_BASE_URL",
     portalUrl: "https://www.data.go.kr/data/15056591/openapi.do",
     group: "race",
@@ -136,6 +160,7 @@ export const DATASETS: KraDataset[] = [
     label: "마필 구간별 경주기록",
     description: "구간별 통과 기록 — 각질·페이스 분석의 핵심 데이터",
     envKey: "KRA_EP_SECTIONAL_RECORD",
+    defaultPath: "API37_1/sectionRecord_1",
     baseEnvKey: "KRA_API_BASE_URL",
     portalUrl: "https://www.data.go.kr/data/15057859/openapi.do",
     group: "race",
@@ -148,6 +173,7 @@ export const DATASETS: KraDataset[] = [
     label: "경주마 출전취소 정보",
     description: "출전취소 마필과 변경사유 — 출전표 보정에 사용",
     envKey: "KRA_EP_ENTRY_CANCEL",
+    defaultPath: "API9_1/raceHorseCancelInfo_1",
     baseEnvKey: "KRA_API_BASE_URL",
     portalUrl: "https://www.data.go.kr/data/15056779/openapi.do",
     group: "race",
@@ -159,6 +185,7 @@ export const DATASETS: KraDataset[] = [
     label: "AI학습용 경주계획",
     description: "경주 단위 조건 — 거리·두수·등급·출전조건·상금·날씨·주로상태·발주시각",
     envKey: "KRA_EP_AI_RACE_PLAN",
+    defaultPath: "API154/racePlan",
     baseEnvKey: "KRA_AI_BASE_URL",
     portalUrl: "https://www.data.go.kr/data/15143802/openapi.do",
     group: "ai",

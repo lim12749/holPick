@@ -40,13 +40,14 @@ export interface Record0Stats {
   showRate: number | null;
 }
 
-function num(v: unknown): number {
+/** 응답 값을 숫자로. 콤마가 섞여 오는 필드가 있어 제거한 뒤 변환한다. */
+export function num(v: unknown): number {
   if (typeof v === "number") return v;
   const n = Number(String(v ?? "").replace(/,/g, ""));
   return Number.isFinite(n) ? n : 0;
 }
 
-function str(v: unknown): string {
+export function str(v: unknown): string {
   const s = String(v ?? "").trim();
   return s;
 }
@@ -64,7 +65,16 @@ function rate(part: number, total: number): number | null {
   return Math.min(Math.max(part / total, 0), 1);
 }
 
-function buildStats(starts: number, first: number, second: number, third: number): Record0Stats {
+/**
+ * 착순 횟수로 전적 통계를 만든다.
+ * 출전표 파서(`entry.ts`)도 같은 계산을 쓰므로 여기서만 정의한다.
+ */
+export function buildStats(
+  starts: number,
+  first: number,
+  second: number,
+  third: number,
+): Record0Stats {
   return {
     starts,
     first,

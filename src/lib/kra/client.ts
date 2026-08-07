@@ -199,6 +199,36 @@ function envInt(name: string, fallback: number): number {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
+/** base URL 이 설정되지 않아도 동작하도록 하는 기본값. */
+export const DEFAULT_BASE_URL = "https://apis.data.go.kr/B551015";
+
+export type PathSource = "env" | "default";
+
+/**
+ * 호출에 쓸 경로를 정한다.
+ *
+ * 포털은 요청주소를 `https://apis.data.go.kr/B551015/API8_2/raceHorseInfo_2` 처럼
+ * 전체 URL로 보여주므로 그대로 붙여넣는 게 자연스럽다. base 접두어가 붙어 있으면
+ * 떼어내고, 오퍼레이션명 없이 API 번호까지만 있으면(슬래시 없음) 검증된
+ * defaultPath 로 되돌린다. 절반만 입력된 값으로 조용히 404 를 맞는 것보다 낫다.
+ */
+export function resolvePath(dataset: KraDataset): { path: string; source: PathSource } {
+  const raw = process.env[dataset.envKey]?.trim() ?? "";
+  const key = process.env.KRA_API_KEY?.trim();
+
+  // 인증키가 들어간 경우는 오설정 가드가 따로 잡으므로 여기서는 기본값으로 두지 않는다.
+  if (raw && key && raw === key) return { path: raw, source: "env" };
+
+  const stripped = raw
+    .replace(/^https?:\/\//i, "")
+    .replace(/^apis\.data\.go\.kr\/B551015\/?/i, "")
+    .replace(/^\/+|\/+$/g, "");
+
+  // 슬래시가 있어야 `API번호/오퍼레이션명` 형태다.
+  if (stripped.includes("/")) return { path: stripped, source: "env" };
+  return { path: dataset.defaultPath, source: "default" };
+}
+
 export interface CallOptions {
   meet?: string;
   pageNo?: number;
@@ -213,6 +243,13 @@ export interface CallOptions {
    * 봐야 하는 곳만 생략한다.
    */
   revalidateSeconds?: number;
+  /**
+   * 이 호출에만 적용할 타임아웃(ms). 생략하면 KRA_TIMEOUT_MS.
+   *
+   * 월 단위 조회처럼 응답이 오래 걸리는 요청이 있다. 실측상 같은 요청이
+   * 1.7초에서 29초까지 널뛰므로, 대량 조회는 개별로 넉넉히 잡아야 한다.
+   */
+  timeoutMs?: number;
 }
 
 function emptyResult(status: KraStatus, message: string, hint?: string): KraResult {
@@ -238,26 +275,29 @@ export async function callKra(datasetId: string, opts: CallOptions = {}): Promis
   return callDataset(dataset, opts);
 }
 
+/**
+ * 데이터셋 하나를 호출한다.
+ *
+ * 어떤 경로를 어디서 가져왔는지(env 오버라이드인지 검증된 기본값인지)를 결과에
+ * 실어 준다. 진단 화면에서 설정 상태를 확인할 때 필요하다.
+ */
 export async function callDataset(dataset: KraDataset, opts: CallOptions = {}): Promise<KraResult> {
+  const { path, source } = resolvePath(dataset);
+  const result = await callDatasetInner(dataset, opts);
+  return { ...result, path, pathSource: source };
+}
+
+async function callDatasetInner(dataset: KraDataset, opts: CallOptions = {}): Promise<KraResult> {
   const key = process.env.KRA_API_KEY?.trim();
-  const base = process.env[dataset.baseEnvKey]?.trim();
-  const path = process.env[dataset.envKey]?.trim();
+  const base = process.env[dataset.baseEnvKey]?.trim() || DEFAULT_BASE_URL;
+  // 출처(source)는 호출부 래퍼가 결과에 실어 주므로 여기서는 경로만 쓴다.
+  const { path } = resolvePath(dataset);
 
   if (!key) {
     return emptyResult(
       "auth_error",
       "인증키가 설정되지 않았습니다.",
       ".env.local 에 KRA_API_KEY 를 채워주세요.",
-    );
-  }
-  if (!base) {
-    return emptyResult("unset", "base URL 이 설정되지 않았습니다.", `.env.local 의 ${dataset.baseEnvKey} 를 확인하세요.`);
-  }
-  if (!path) {
-    return emptyResult(
-      "unset",
-      "엔드포인트가 아직 설정되지 않았습니다.",
-      `공공데이터포털 마이페이지 → 데이터활용 → Open API → 개발계정 → "${dataset.label}" → 상세기능 의 요청주소에서 base URL 뒤 경로를 복사해 .env.local 의 ${dataset.envKey} 에 넣어주세요.`,
     );
   }
 
@@ -268,15 +308,7 @@ export async function callDataset(dataset: KraDataset, opts: CallOptions = {}): 
     return emptyResult(
       "unset",
       "엔드포인트 자리에 인증키가 들어가 있습니다.",
-      `${dataset.envKey} 에는 인증키가 아니라 주소의 뒷부분(예: API8_2/raceHorseInfo_2)을 넣어야 합니다. 인증키는 KRA_API_KEY 한 줄에만 있으면 되고, 모든 데이터셋이 그 값을 함께 씁니다.`,
-    );
-  }
-  // 슬래시 없이 긴 문자열이면 경로가 아니라 키·토큰일 가능성이 크다.
-  if (!path.includes("/") && path.length > 40) {
-    return emptyResult(
-      "unset",
-      "엔드포인트 형식이 아닙니다.",
-      `${dataset.envKey} 값이 경로처럼 보이지 않습니다. "API번호/오퍼레이션명" 형태여야 합니다. 인증키를 붙여 넣지 않았는지 확인해 주세요.`,
+      `${dataset.envKey} 에는 인증키가 아니라 주소의 뒷부분(예: ${dataset.defaultPath})을 넣어야 합니다. 인증키는 KRA_API_KEY 한 줄에만 있으면 되고, 모든 데이터셋이 그 값을 함께 씁니다. 이 줄을 아예 비워두면 검증된 기본값이 쓰입니다.`,
     );
   }
 
@@ -294,7 +326,7 @@ export async function callDataset(dataset: KraDataset, opts: CallOptions = {}): 
     `?serviceKey=${encodeServiceKey(key)}&${new URLSearchParams(params).toString()}`;
   const maskedUrl = maskKey(url);
 
-  const timeoutMs = envInt("KRA_TIMEOUT_MS", 10000);
+  const timeoutMs = opts.timeoutMs ?? envInt("KRA_TIMEOUT_MS", 10000);
   const startedAt = Date.now();
 
   let httpCode: number | null = null;

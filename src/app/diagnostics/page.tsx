@@ -61,10 +61,28 @@ function ResultCard({
         <div className="rounded-md bg-surface-muted px-3 py-2 text-xs">
           <p className="font-medium">{result.message}</p>
           {result.hint && <p className="mt-1 text-muted">{result.hint}</p>}
+          {/*
+            경로는 유효한데 응답이 없거나 0건인 경우는 사용자가 고칠 수 없다.
+            설정 오류와 섞이면 없는 문제를 찾아 헤매게 되므로 명시적으로 구분한다.
+          */}
+          {(result.status === "network" || result.status === "no_data") && (
+            <p className="mt-1 text-muted">
+              경로는 유효합니다. 제공 측 상태이며 설정으로 해결할 수 없습니다.
+            </p>
+          )}
           {result.code && (
             <p className="mt-1 font-mono text-[11px] text-muted">코드: {result.code}</p>
           )}
         </div>
+      )}
+
+      {result.path && (
+        <p className="text-xs text-muted">
+          경로 <code className="font-mono">{result.path}</code>
+          <span className="ml-1">
+            ({result.pathSource === "env" ? ".env 오버라이드" : "코드 기본값"})
+          </span>
+        </p>
       )}
 
       {fields.length > 0 && (

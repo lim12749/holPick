@@ -42,6 +42,9 @@ export interface KraResult {
   rows: KraRow[];
   /** 인증키가 가려진 요청 URL. 화면에 노출해도 안전하다. */
   maskedUrl: string;
+  /** 실제로 호출한 경로와 그 출처. 진단 화면에서 env 오버라이드 여부를 보여준다. */
+  path?: string;
+  pathSource?: "env" | "default";
 }
 
 export type ColumnAlign = "left" | "right";

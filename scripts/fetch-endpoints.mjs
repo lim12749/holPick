@@ -1,23 +1,19 @@
 #!/usr/bin/env node
 /**
- * 공공데이터포털 참고문서(.docx)에서 각 데이터셋의 요청주소를 자동으로 꺼낸다.
+ * 공공데이터포털 페이지에 박혀 있는 Swagger 명세에서 요청주소를 자동으로 꺼낸다.
  *
- * 오퍼레이션명은 포털 화면에 노출되지 않고 참고문서 안에만 있다. 다행히 그 문서는
- * 로그인 없이 받을 수 있고 .docx 는 XML 이 든 zip 이라, 받아서 본문에서
- * `apis.data.go.kr/...` 패턴을 뽑아내면 된다.
+ * 오퍼레이션명은 화면에 표시되지 않지만, 각 데이터셋 페이지의 HTML 안에는
+ * Swagger 스펙이 통째로 들어 있다. 거기 `host` 와 `paths` 를 합치면 정확한
+ * 요청주소가 나온다. 로그인도, 문서 다운로드도 필요 없다.
+ *
+ *   "host": "apis.data.go.kr/B551015/API15_2"
+ *   "paths": { "/raceHorseResult_2": ... }
+ *   → API15_2/raceHorseResult_2
  *
  * 사용법:
  *   node scripts/fetch-endpoints.mjs            # 레지스트리의 전 데이터셋
  *   node scripts/fetch-endpoints.mjs 15058677   # 특정 데이터셋 ID 만
  */
-
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-
-const run = promisify(execFile);
 
 /** 레지스트리(src/lib/kra/datasets.ts)와 같은 목록. 환경변수 이름까지 함께 출력한다. */
 const DATASETS = [
@@ -34,45 +30,33 @@ const DATASETS = [
 
 const BASE_PREFIX = "apis.data.go.kr/B551015/";
 
-async function findFileId(pk) {
-  const res = await fetch(`https://www.data.go.kr/data/${pk}/openapi.do`, {
-    signal: AbortSignal.timeout(30_000),
-  });
-  const html = await res.text();
-  // 참고문서 다운로드는 fn_fileDownload('FILE_xxx','1') 형태로 걸려 있다.
-  const m = html.match(/fn_fileDownload\('([^']+)','(\d+)'\)/);
-  return m ? { atchFileId: m[1], fileSn: m[2] } : null;
-}
+/**
+ * 페이지 HTML 에서 Swagger 의 host 와 paths 를 뽑아 경로를 조립한다.
+ *
+ * HTML 안에 JSON 이 escape 된 채로 들어 있어 정규식으로 읽는다. 전체 JSON 을
+ * 파싱하려 들면 escape 형태가 페이지마다 달라 오히려 깨진다.
+ */
+function extractFromSwagger(html) {
+  const hostMatch = html.match(/"host"\s*:\s*"apis\.data\.go\.kr\/B551015\/([A-Za-z0-9_]+)"/);
+  if (!hostMatch) return { apiNo: null, operations: [] };
+  const apiNo = hostMatch[1];
 
-async function extractEndpoints({ atchFileId, fileSn }) {
-  const res = await fetch(
-    `https://www.data.go.kr/cmm/cmm/fileDownload.do?atchFileId=${atchFileId}&fileSn=${fileSn}`,
-    { signal: AbortSignal.timeout(60_000) },
-  );
-  const buf = Buffer.from(await res.arrayBuffer());
-  // .docx 가 아니면(예: hwp) 여기서 포기한다.
-  if (buf.subarray(0, 2).toString() !== "PK") return { unsupported: true, paths: [] };
-
-  const dir = await mkdtemp(join(tmpdir(), "kra-doc-"));
-  try {
-    const file = join(dir, "doc.docx");
-    await writeFile(file, buf);
-    await run("unzip", ["-o", "-q", file, "-d", dir]);
-    const xml = await readFile(join(dir, "word", "document.xml"), "utf8");
-    const text = xml
-      .replace(/<[^>]+>/g, "")
-      .replace(/&amp;/g, "&")
-      .replace(/&lt;/g, "<")
-      .replace(/&gt;/g, ">");
-
-    const found = new Set();
-    for (const m of text.matchAll(/apis\.data\.go\.kr\/B551015\/([A-Za-z0-9_]+)\/([A-Za-z0-9_]+)/g)) {
-      found.add(`${m[1]}/${m[2]}`);
+  // host 뒤에 이어지는 paths 블록에서 "/오퍼레이션명" 을 모은다.
+  const after = html.slice(hostMatch.index);
+  const pathsMatch = after.match(/"paths"\s*:\s*\{/);
+  const operations = new Set();
+  if (pathsMatch) {
+    // paths 블록 앞부분만 훑어도 오퍼레이션 키가 모두 잡힌다.
+    const window = after.slice(pathsMatch.index, pathsMatch.index + 200_000);
+    for (const m of window.matchAll(/"\/([A-Za-z0-9_]+)"\s*:\s*\{\s*"get"/g)) {
+      operations.add(m[1]);
     }
-    return { unsupported: false, paths: [...found] };
-  } finally {
-    await rm(dir, { recursive: true, force: true });
   }
+  // 보조 수단: swaggerOprtinVOs 의 operationId.
+  for (const m of html.matchAll(/"operationId"\s*:\s*"([A-Za-z0-9_]+)"/g)) {
+    operations.add(m[1]);
+  }
+  return { apiNo, operations: [...operations] };
 }
 
 async function main() {
@@ -87,23 +71,22 @@ async function main() {
   for (const d of targets) {
     process.stdout.write(`${d.label.padEnd(22)} `);
     try {
-      const fileRef = await findFileId(d.pk);
-      if (!fileRef) {
-        console.log("참고문서 링크를 찾지 못함");
+      const res = await fetch(`https://www.data.go.kr/data/${d.pk}/openapi.do`, {
+        signal: AbortSignal.timeout(30_000),
+      });
+      const html = await res.text();
+      const { apiNo, operations } = extractFromSwagger(html);
+
+      if (!apiNo) {
+        console.log("Swagger 명세를 찾지 못함 — 마이페이지에서 수동 확인 필요");
         continue;
       }
-      const { unsupported, paths } = await extractEndpoints(fileRef);
-      if (unsupported) {
-        console.log("docx 가 아닌 문서 형식 — 수동 확인 필요");
+      if (operations.length === 0) {
+        console.log(`${apiNo}/???   (오퍼레이션명을 찾지 못함)`);
         continue;
       }
-      if (paths.length === 0) {
-        console.log("문서에서 요청주소를 찾지 못함");
-        continue;
-      }
-      // 가장 짧은 것이 군더더기 없는 경로일 가능성이 높다(문서에 설명이 붙어 나오는 경우가 있음).
-      const best = paths.sort((a, b) => a.length - b.length)[0];
-      console.log(best + (paths.length > 1 ? `   (후보 ${paths.length}개)` : ""));
+      const best = `${apiNo}/${operations[0]}`;
+      console.log(best + (operations.length > 1 ? `   (후보 ${operations.length}개: ${operations.join(", ")})` : ""));
       lines.push(`${d.envKey}=${best}`);
     } catch (err) {
       console.log(`실패: ${err instanceof Error ? err.message : String(err)}`);
