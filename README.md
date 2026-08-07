@@ -46,8 +46,9 @@
 ### API 호출 규격
 
 - **Base URL:** `https://apis.data.go.kr/B551015/{오퍼레이션명}`
-  - 예) 경주마 상세정보 → `https://apis.data.go.kr/B551015/API8_2`
-  - 오퍼레이션명은 데이터셋마다 다르므로, 각 데이터셋 페이지의 **참고문서(활용가이드)** 에서 확인해야 합니다.
+  - 예) 경주마 상세정보 → `https://apis.data.go.kr/B551015/API8_2/raceHorseInfo_2` ✅ 검증됨
+  - 오퍼레이션명은 데이터셋마다 다르고 명명 규칙이 없습니다. **마이페이지 → 데이터활용 → Open API → 개발계정 → 해당 API → 상세기능**의 요청주소에서 확인하세요.
+  - 인증키 없이 경로 존재 여부만 확인하려면 `scripts/probe-endpoints.mjs` 를 쓰면 됩니다.
 - **공통 파라미터**
   - `serviceKey` — 발급받은 인증키 (필수)
   - `meet` — 경마장 구분: `1` 서울 / `2` 부산경남 / `3` 제주 *(이 프로젝트는 서울=`1` 중심)*
@@ -101,6 +102,27 @@ npm run dev
 | `npm run build` | 프로덕션 빌드 |
 | `npm run start` | 빌드 결과 실행 |
 | `npm run lint` | ESLint 검사 |
+
+### 화면
+
+| 경로 | 내용 |
+|---|---|
+| `/` | 9개 데이터셋 연결 상태 요약 |
+| `/diagnostics` | API 진단 — 상태·응답시간·전체건수·응답필드·마스킹된 요청 URL, 실패 시 원인별 해결 안내 |
+| `/datasets/[id]` | 범용 데이터 탐색 — 엔드포인트가 설정된 모든 데이터셋을 자동 지원 |
+| `/horses` | 경주마 목록 · 마명 검색 · 통산 성적 · 레이팅 |
+| `/horses/[hrNo]` | 경주마 상세 — 프로필, 혈통, 통산 vs 최근 1년 성적 비교 |
+
+### 진단 스크립트
+
+```bash
+# 엔드포인트 존재 여부 탐색 (인증키 불필요)
+#   401 SERVICE_KEY_IS_NULL → 경로 존재 / 400 → 경로 없음
+node scripts/probe-endpoints.mjs API8_2/raceHorseInfo_2 API26_2/entryList_2
+
+# 설정된 데이터셋의 실제 응답 필드 확인
+node --env-file=.env.local scripts/inspect-dataset.mjs KRA_EP_HORSE_DETAIL
+```
 
 ---
 

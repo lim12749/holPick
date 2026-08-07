@@ -2,25 +2,71 @@
 
 :root {
   --background: #ffffff;
-  --foreground: #171717;
-}
+  --surface: #ffffff;
+  --surface-muted: #f6f7f9;
+  --border: #e3e6ea;
+  --foreground: #14171a;
+  --muted: #626b75;
+  --accent: #1c64f2;
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --ok: #0f8a4a;
+  --ok-bg: #e7f6ed;
+  --warn: #a35b00;
+  --warn-bg: #fdf1e0;
+  --danger: #c02626;
+  --danger-bg: #fdeaea;
+  --neutral: #626b75;
+  --neutral-bg: #eef0f3;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --background: #0c0e11;
+    --surface: #14171c;
+    --surface-muted: #191d23;
+    --border: #272c34;
+    --foreground: #e8eaed;
+    --muted: #98a1ad;
+    --accent: #6c9bff;
+
+    --ok: #4ade80;
+    --ok-bg: #10261a;
+    --warn: #fbbf5a;
+    --warn-bg: #2a1f0d;
+    --danger: #f87171;
+    --danger-bg: #2b1414;
+    --neutral: #98a1ad;
+    --neutral-bg: #1e232a;
   }
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-surface-muted: var(--surface-muted);
+  --color-border: var(--border);
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+
+  --color-ok: var(--ok);
+  --color-ok-bg: var(--ok-bg);
+  --color-warn: var(--warn);
+  --color-warn-bg: var(--warn-bg);
+  --color-danger: var(--danger);
+  --color-danger-bg: var(--danger-bg);
+  --color-neutral: var(--neutral);
+  --color-neutral-bg: var(--neutral-bg);
+
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-geist-sans), -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo",
+    "Malgun Gothic", sans-serif;
+  /* 숫자를 표에서 세로로 정렬시킨다. */
+  font-variant-numeric: tabular-nums;
 }
