@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { DataTable } from "@/components/DataTable";
 import { PageHeader } from "@/components/PageHeader";
+import { Pagination } from "@/components/Pagination";
 import { StatusBadge } from "@/components/StatusBadge";
 import { callDataset } from "@/lib/kra/client";
 import { DATASETS, DEFAULT_MEET, getDataset } from "@/lib/kra/datasets";
@@ -79,26 +80,7 @@ export default async function DatasetPage({
             caption={`${dataset.label} ${pageNo}페이지`}
           />
 
-          <nav className="mt-4 flex items-center justify-between text-sm">
-            {pageNo > 1 ? (
-              <Link href={linkTo(pageNo - 1)} className="text-accent hover:underline">
-                ← 이전
-              </Link>
-            ) : (
-              <span className="text-muted">← 이전</span>
-            )}
-            <span className="text-muted">
-              {pageNo}
-              {totalPages ? ` / ${totalPages}` : ""} 페이지
-            </span>
-            {totalPages == null || pageNo < totalPages ? (
-              <Link href={linkTo(pageNo + 1)} className="text-accent hover:underline">
-                다음 →
-              </Link>
-            ) : (
-              <span className="text-muted">다음 →</span>
-            )}
-          </nav>
+          <Pagination pageNo={pageNo} totalPages={totalPages} hrefFor={linkTo} />
         </>
       ) : (
         <div className="rounded-lg border border-border bg-surface p-6">

@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { PageHeader } from "@/components/PageHeader";
+import { Pagination } from "@/components/Pagination";
 import { StatusBadge } from "@/components/StatusBadge";
 import { callKra } from "@/lib/kra/client";
 import { formatPrize, formatRate, parseHorse } from "@/lib/kra/horse";
@@ -70,7 +71,21 @@ export default async function HorsesPage({
         )}
       </form>
 
-      {result.status !== "ok" ? (
+      {/* 검색 결과 없음은 오류가 아니다. 조회는 성공했으므로 가벼운 빈 상태로 보여준다. */}
+      {result.status === "no_data" ? (
+        <p className="rounded-lg border border-border bg-surface-muted px-4 py-10 text-center text-sm text-muted">
+          {query ? (
+            <>
+              &ldquo;{query}&rdquo; 와 일치하는 경주마가 없습니다.{" "}
+              <Link href="/horses" className="text-accent hover:underline">
+                전체 보기
+              </Link>
+            </>
+          ) : (
+            "표시할 경주마가 없습니다."
+          )}
+        </p>
+      ) : result.status !== "ok" ? (
         <div className="rounded-lg border border-border bg-surface p-6">
           <p className="font-medium">{result.message}</p>
           {result.hint && <p className="mt-2 text-sm text-muted">{result.hint}</p>}
@@ -144,26 +159,7 @@ export default async function HorsesPage({
             </table>
           </div>
 
-          <nav className="mt-4 flex items-center justify-between text-sm">
-            {pageNo > 1 ? (
-              <Link href={linkTo(pageNo - 1)} className="text-accent hover:underline">
-                ← 이전
-              </Link>
-            ) : (
-              <span className="text-muted">← 이전</span>
-            )}
-            <span className="text-muted">
-              {pageNo}
-              {totalPages ? ` / ${totalPages}` : ""} 페이지
-            </span>
-            {totalPages == null || pageNo < totalPages ? (
-              <Link href={linkTo(pageNo + 1)} className="text-accent hover:underline">
-                다음 →
-              </Link>
-            ) : (
-              <span className="text-muted">다음 →</span>
-            )}
-          </nav>
+          <Pagination pageNo={pageNo} totalPages={totalPages} hrefFor={linkTo} />
         </>
       )}
     </>
