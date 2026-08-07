@@ -261,6 +261,25 @@ export async function callDataset(dataset: KraDataset, opts: CallOptions = {}): 
     );
   }
 
+  // 흔한 오설정: 엔드포인트 자리에 인증키를 넣는 경우.
+  // 그대로 두면 존재하지 않는 주소가 만들어져 HTTP 400 "경로 없음"으로만 보이고
+  // 진짜 원인이 드러나지 않는다. 여기서 명시적으로 잡아 준다.
+  if (path === key) {
+    return emptyResult(
+      "unset",
+      "엔드포인트 자리에 인증키가 들어가 있습니다.",
+      `${dataset.envKey} 에는 인증키가 아니라 주소의 뒷부분(예: API8_2/raceHorseInfo_2)을 넣어야 합니다. 인증키는 KRA_API_KEY 한 줄에만 있으면 되고, 모든 데이터셋이 그 값을 함께 씁니다.`,
+    );
+  }
+  // 슬래시 없이 긴 문자열이면 경로가 아니라 키·토큰일 가능성이 크다.
+  if (!path.includes("/") && path.length > 40) {
+    return emptyResult(
+      "unset",
+      "엔드포인트 형식이 아닙니다.",
+      `${dataset.envKey} 값이 경로처럼 보이지 않습니다. "API번호/오퍼레이션명" 형태여야 합니다. 인증키를 붙여 넣지 않았는지 확인해 주세요.`,
+    );
+  }
+
   const params: Record<string, string> = {
     pageNo: String(opts.pageNo ?? 1),
     numOfRows: String(opts.numOfRows ?? envInt("KRA_NUM_OF_ROWS", 100)),
