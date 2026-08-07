@@ -30,13 +30,32 @@ export default async function RacesPage({
   const explicitMonth = /^\d{6}$/.test(month ?? "") ? (month as string) : null;
   const today = todayKst();
 
-  const fetchMonth = (ym: string) =>
-    callKra("entry-list", {
+  /**
+   * 출전표는 임박한 경주만, 경주기록은 시행 전후 모두 담고 있다.
+   * 둘을 합쳐야 지난 경주일과 다가올 경주일이 한 달력에 함께 보인다.
+   */
+  const fetchMonth = async (ym: string) => {
+    const opts = {
       numOfRows: MONTH_ROWS,
       extra: { rc_month: ym },
       timeoutMs: MONTH_TIMEOUT_MS,
       revalidateSeconds: MONTH_REVALIDATE_SEC,
-    });
+    };
+    const [entry, result] = await Promise.all([
+      callKra("entry-list", opts),
+      callKra("race-result", opts),
+    ]);
+    // 같은 날짜가 양쪽에 있으면 groupByDate 가 합산해버리므로, 경주기록에만 있는
+    // 날짜(= 지난 경주일)만 골라 덧붙인다.
+    const entryDates = new Set(entry.rows.map((r) => String(r.rcDate ?? "")));
+    const extraRows = result.rows.filter((r) => !entryDates.has(String(r.rcDate ?? "")));
+    return {
+      status: entry.status,
+      message: entry.message,
+      hint: entry.hint,
+      rows: [...entry.rows, ...extraRows],
+    };
+  };
 
   let yearMonth = explicitMonth ?? currentYearMonthKst();
   let result = await fetchMonth(yearMonth);
