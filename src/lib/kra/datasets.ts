@@ -15,7 +15,13 @@ export const MEET_STANDARD: MeetCodes = {
   "3": "제주",
 };
 
-/** AI학습용 경주계획 등 일부 데이터셋은 2번과 3번이 반대다. */
+/**
+ * 일부 데이터셋은 2번과 3번이 반대다. 참고문서에서 확인된 것:
+ * AI학습용 경주계획, 마필 구간별 경주기록, 조교사 상세정보.
+ * 서울은 어디서나 1이라 지금은 안전하지만, 다른 경마장으로 확장할 때
+ * 데이터셋마다 반드시 문서를 재확인해야 한다. 틀려도 오류가 나지 않고
+ * 엉뚱한 경마장 데이터가 조용히 섞이기 때문이다.
+ */
 export const MEET_SWAPPED: MeetCodes = {
   "1": "서울",
   "2": "제주",
@@ -133,7 +139,8 @@ export const DATASETS: KraDataset[] = [
     baseEnvKey: "KRA_API_BASE_URL",
     portalUrl: "https://www.data.go.kr/data/15057859/openapi.do",
     group: "race",
-    meetCodes: MEET_STANDARD,
+    // 참고문서 원문: "시행경마장구분(1:서울,2:제주,3:부산)" — 표준과 2·3이 반대다.
+    meetCodes: MEET_SWAPPED,
     preferredColumns: ["rcDate", "rcNo", "hrName", "rcDist", "g1fAccTime", "g3fAccTime"],
   },
   {
