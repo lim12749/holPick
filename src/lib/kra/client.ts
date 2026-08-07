@@ -57,11 +57,22 @@ interface ErrorMapping {
   hint?: string;
 }
 
-/** API 가 돌려주는 코드를 한글 안내로 옮긴다. */
-function mapErrorCode(code: string): ErrorMapping {
-  const c = code.toUpperCase();
+/**
+ * API 가 돌려주는 코드를 한글 안내로 옮긴다.
+ *
+ * 코드와 메시지를 **둘 다** 본다. 한쪽만 넘기면 분기를 놓친다 — 예를 들어
+ * `resultCode: "INFO-200"` + `resultMsg: "해당하는 데이터가 없습니다"` 응답에서
+ * 메시지만 검사하면 코드 분기에 닿지 못해 "데이터 없음"이 "API 오류"로 나온다.
+ * 화면에 띄우는 폴백 문구는 사람이 읽을 수 있는 메시지를 우선한다.
+ */
+function mapErrorCode(code: string, message?: string | null): ErrorMapping {
+  const candidates = [code, message ?? ""]
+    .map((s) => s.trim().toUpperCase())
+    .filter((s) => s !== "");
+  const has = (pred: (c: string) => boolean) => candidates.some(pred);
+  const display = (message ?? "").trim() || code;
 
-  if (c.includes("SERVICE_KEY_IS_NOT_REGISTERED") || c === "30") {
+  if (has((c) => c.includes("SERVICE_KEY_IS_NOT_REGISTERED") || c === "30")) {
     return {
       status: "auth_error",
       message: "인증키가 등록되지 않았습니다.",
@@ -69,21 +80,21 @@ function mapErrorCode(code: string): ErrorMapping {
         "Encoding/Decoding 키를 모두 시도해 보세요. 발급 직후라면 게이트웨이 반영에 1~2시간이 걸릴 수 있습니다.",
     };
   }
-  if (c.includes("SERVICE_KEY_IS_NULL")) {
+  if (has((c) => c.includes("SERVICE_KEY_IS_NULL"))) {
     return {
       status: "auth_error",
       message: "인증키가 전달되지 않았습니다.",
       hint: ".env.local 의 KRA_API_KEY 가 비어 있는지 확인하세요.",
     };
   }
-  if (c.includes("SERVICE_ACCESS_DENIED") || c === "20") {
+  if (has((c) => c.includes("SERVICE_ACCESS_DENIED") || c === "20")) {
     return {
       status: "auth_error",
       message: "이 데이터셋에 대한 접근 권한이 없습니다.",
       hint: "공공데이터포털에서 해당 데이터셋을 활용신청했는지 확인하세요.",
     };
   }
-  if (c.includes("LIMITED_NUMBER_OF_SERVICE_REQUESTS") || c === "22") {
+  if (has((c) => c.includes("LIMITED_NUMBER_OF_SERVICE_REQUESTS") || c === "22")) {
     return {
       status: "quota",
       message: "일일 호출 한도를 초과했습니다.",
@@ -91,14 +102,14 @@ function mapErrorCode(code: string): ErrorMapping {
     };
   }
   // INFO-200 은 일부 data.go.kr API 에서 "해당 데이터 없음"을 뜻한다.
-  if (c.includes("NODATA") || c === "03" || c === "INFO-200") {
+  if (has((c) => c.includes("NODATA") || c === "03" || c === "INFO-200")) {
     return {
       status: "no_data",
       message: "조건에 맞는 데이터가 없습니다.",
       hint: "경마장·날짜 등 조회 조건을 바꿔 보세요.",
     };
   }
-  if (c.includes("HTTP_ERROR") || c.includes("ROUTING") || c === "04") {
+  if (has((c) => c.includes("HTTP_ERROR") || c.includes("ROUTING") || c === "04")) {
     return {
       status: "not_found",
       message: "요청 경로를 찾을 수 없습니다.",
@@ -106,7 +117,7 @@ function mapErrorCode(code: string): ErrorMapping {
     };
   }
 
-  return { status: "api_error", message: `API 오류: ${code}`, hint: undefined };
+  return { status: "api_error", message: `API 오류: ${display}`, hint: undefined };
 }
 
 /**
@@ -356,9 +367,9 @@ export async function callDataset(dataset: KraDataset, opts: CallOptions = {}): 
   const resultMsg = header?.resultMsg != null ? String(header.resultMsg) : null;
   // 코드와 메시지 어느 쪽이든 성공을 뜻하면 성공이다. 둘 다 성공이 아닐 때만 오류로 본다.
   if (resultCode && !isSuccessCode(resultCode) && !isSuccessCode(resultMsg)) {
-    // resultMsg 가 빈 문자열이면 코드로 폴백해야 한다. `??` 는 "" 를 통과시켜
-    // 화면 메시지가 "API 오류: " 로 비어버린다.
-    const mapped = mapErrorCode(resultMsg || resultCode);
+    // 코드와 메시지를 모두 넘긴다. 분기는 둘 다 검사하고, 화면 문구는 메시지를
+    // 우선하되 메시지가 비어 있으면 코드로 폴백한다.
+    const mapped = mapErrorCode(resultCode, resultMsg);
     return { ...emptyResult(mapped.status, mapped.message, mapped.hint), code: resultCode, httpCode, elapsedMs, maskedUrl };
   }
 

@@ -72,16 +72,19 @@ export default async function DatasetPage({
       {/* empty_page 도 조회는 성공한 것이므로 표와 페이지 이동을 유지한다. */}
       {result.status === "ok" || result.status === "empty_page" ? (
         <>
-          {result.status === "empty_page" && (
-            <p className="mb-4 rounded-lg border border-border bg-surface-muted px-4 py-3 text-sm text-muted">
+          {/* 빈 페이지에서는 안내 문구 하나만 보인다. 표를 함께 그리면
+              DataTable 의 "표시할 행이 없습니다."와 문구가 겹친다. */}
+          {result.status === "empty_page" ? (
+            <p className="rounded-lg border border-border bg-surface-muted px-4 py-8 text-center text-sm text-muted">
               {result.message}
             </p>
+          ) : (
+            <DataTable
+              rows={result.rows}
+              preferredColumns={dataset.preferredColumns}
+              caption={`${dataset.label} ${pageNo}페이지`}
+            />
           )}
-          <DataTable
-            rows={result.rows}
-            preferredColumns={dataset.preferredColumns}
-            caption={`${dataset.label} ${pageNo}페이지`}
-          />
 
           <Pagination pageNo={pageNo} totalPages={totalPages} hrefFor={linkTo} />
         </>
