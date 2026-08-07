@@ -3,6 +3,7 @@ import type { KraStatus } from "@/lib/kra/types";
 const STYLES: Record<KraStatus, { label: string; className: string }> = {
   ok: { label: "정상", className: "bg-ok-bg text-ok" },
   no_data: { label: "데이터 없음", className: "bg-warn-bg text-warn" },
+  empty_page: { label: "빈 페이지", className: "bg-warn-bg text-warn" },
   unset: { label: "미설정", className: "bg-neutral-bg text-neutral" },
   auth_error: { label: "인증 오류", className: "bg-danger-bg text-danger" },
   not_found: { label: "경로 없음", className: "bg-danger-bg text-danger" },

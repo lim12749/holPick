@@ -59,7 +59,9 @@ function str(v: unknown): string {
  */
 function rate(part: number, total: number): number | null {
   if (total <= 0) return null;
-  return Math.min(part / total, 1);
+  // 착순 합이 출주 수를 넘거나 음수로 오는 불일치 응답이 "120.0%" / "-10.0%" 로
+  // 그대로 나가지 않도록 0~1 로 가둔다.
+  return Math.min(Math.max(part / total, 0), 1);
 }
 
 function buildStats(starts: number, first: number, second: number, third: number): Record0Stats {
@@ -93,11 +95,17 @@ function ageFromBirthday(raw: string, currentYear: number): number | null {
   return age >= 0 ? age : null;
 }
 
-/** 한국 경마 기준이므로 연도는 KST(UTC+9)로 판단한다. */
+/**
+ * 한국 경마 기준이므로 연도는 KST(UTC+9)로 판단한다.
+ * 포매터 생성은 비싸므로 모듈 스코프에서 한 번만 만든다 (행마다 만들면 안 된다).
+ */
+const KST_YEAR_FORMAT = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Asia/Seoul",
+  year: "numeric",
+});
+
 function currentYearKst(): number {
-  return Number(
-    new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul", year: "numeric" }).format(new Date()),
-  );
+  return Number(KST_YEAR_FORMAT.format(new Date()));
 }
 
 export function parseHorse(row: KraRow): Horse {

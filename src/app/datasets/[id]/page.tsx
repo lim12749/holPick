@@ -69,8 +69,14 @@ export default async function DatasetPage({
         </Link>
       </div>
 
-      {result.status === "ok" ? (
+      {/* empty_page 도 조회는 성공한 것이므로 표와 페이지 이동을 유지한다. */}
+      {result.status === "ok" || result.status === "empty_page" ? (
         <>
+          {result.status === "empty_page" && (
+            <p className="mb-4 rounded-lg border border-border bg-surface-muted px-4 py-3 text-sm text-muted">
+              {result.message}
+            </p>
+          )}
           <DataTable
             rows={result.rows}
             preferredColumns={dataset.preferredColumns}

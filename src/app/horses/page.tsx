@@ -3,7 +3,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { Pagination } from "@/components/Pagination";
 import { StatusBadge } from "@/components/StatusBadge";
 import { callKra } from "@/lib/kra/client";
-import { MAX_QUERY_LENGTH, parsePageNo } from "@/lib/kra/datasets";
+import { MAX_QUERY_LENGTH, parsePageNo, truncateQuery } from "@/lib/kra/datasets";
 import { formatPrize, formatRate, parseHorse } from "@/lib/kra/horse";
 
 export const dynamic = "force-dynamic";
@@ -21,7 +21,7 @@ export default async function HorsesPage({
 }) {
   const { page, q } = await searchParams;
   const pageNo = parsePageNo(page);
-  const query = (q ?? "").trim().slice(0, MAX_QUERY_LENGTH);
+  const query = truncateQuery(q);
 
   const result = await callKra("horse-detail", {
     pageNo,
@@ -87,7 +87,7 @@ export default async function HorsesPage({
             "표시할 경주마가 없습니다."
           )}
         </p>
-      ) : result.status !== "ok" ? (
+      ) : result.status !== "ok" && result.status !== "empty_page" ? (
         <div className="rounded-lg border border-border bg-surface p-6">
           <p className="font-medium">{result.message}</p>
           {result.hint && <p className="mt-2 text-sm text-muted">{result.hint}</p>}
@@ -97,6 +97,11 @@ export default async function HorsesPage({
         </div>
       ) : (
         <>
+          {result.status === "empty_page" && (
+            <p className="mb-4 rounded-lg border border-border bg-surface-muted px-4 py-3 text-sm text-muted">
+              {result.message}
+            </p>
+          )}
           {/* sticky 헤더가 동작하도록 세로 스크롤도 이 컨테이너가 맡는다. DataTable 과 동일. */}
           <div className="max-h-[70vh] overflow-auto rounded-lg border border-border">
             <table className="w-full border-collapse text-sm">

@@ -90,7 +90,8 @@ function mapErrorCode(code: string): ErrorMapping {
       hint: "내일 초기화됩니다. 운영단계 승인과 활용사례 등록으로 한도를 올릴 수 있습니다.",
     };
   }
-  if (c.includes("NODATA") || c === "03") {
+  // INFO-200 은 일부 data.go.kr API 에서 "해당 데이터 없음"을 뜻한다.
+  if (c.includes("NODATA") || c === "03" || c === "INFO-200") {
     return {
       status: "no_data",
       message: "조건에 맞는 데이터가 없습니다.",
@@ -119,7 +120,8 @@ function isSuccessCode(code: string | null | undefined): boolean {
   if (code == null) return false;
   const c = code.trim().toUpperCase();
   if (c === "") return false;
-  if (/NORMAL/.test(c)) return true;
+  // ABNORMAL_* 을 성공으로 삼키지 않도록 NORMAL 앞을 앵커링한다.
+  if (/(^|[^A-Z])NORMAL/.test(c)) return true;
   // 00, 0, INFO-0, INFO-00, INFO-000 … 숫자 부분이 전부 0이면 성공이다.
   return /^(INFO-)?0+$/.test(c);
 }
@@ -354,7 +356,9 @@ export async function callDataset(dataset: KraDataset, opts: CallOptions = {}): 
   const resultMsg = header?.resultMsg != null ? String(header.resultMsg) : null;
   // 코드와 메시지 어느 쪽이든 성공을 뜻하면 성공이다. 둘 다 성공이 아닐 때만 오류로 본다.
   if (resultCode && !isSuccessCode(resultCode) && !isSuccessCode(resultMsg)) {
-    const mapped = mapErrorCode(resultMsg ?? resultCode);
+    // resultMsg 가 빈 문자열이면 코드로 폴백해야 한다. `??` 는 "" 를 통과시켜
+    // 화면 메시지가 "API 오류: " 로 비어버린다.
+    const mapped = mapErrorCode(resultMsg || resultCode);
     return { ...emptyResult(mapped.status, mapped.message, mapped.hint), code: resultCode, httpCode, elapsedMs, maskedUrl };
   }
 
@@ -362,19 +366,27 @@ export async function callDataset(dataset: KraDataset, opts: CallOptions = {}): 
   const totalCount = toNumber(body?.totalCount);
   const pageNo = toNumber(body?.pageNo);
 
-  // 행이 없어도 totalCount 가 0보다 크면 "결과 없음"이 아니라 "이 페이지에 행이 없음"이다.
-  // 이를 구분하지 않으면 마지막 페이지를 넘겼을 때 표와 페이지 이동이 함께 사라져
-  // 돌아갈 링크조차 없는 막다른 길이 된다.
-  const emptyPage = rows.length === 0 && totalCount != null && totalCount > 0;
+  // 행이 없어도 전체 건수가 있고 2페이지 이상이면 "결과 없음"이 아니라
+  // "마지막 페이지를 넘겼음"이다. 이를 구분하지 않으면 표와 페이지 이동이 함께
+  // 사라져 돌아갈 링크조차 없는 막다른 길이 된다.
+  //
+  // 1페이지는 제외한다. API 가 검색 필터를 무시하고 totalCount 만 전체 건수로
+  // 돌려주면, 무결과 검색이 빈 페이지로 오인되어 "검색 결과 없음" 안내가 사라진다.
+  const requestedPage = opts.pageNo ?? 1;
+  const isEmptyPage =
+    rows.length === 0 && totalCount != null && totalCount > 0 && requestedPage > 1;
+
+  const status: KraStatus =
+    rows.length === 0 ? (isEmptyPage ? "empty_page" : "no_data") : "ok";
 
   return {
-    status: rows.length === 0 && !emptyPage ? "no_data" : "ok",
+    status,
     message:
-      rows.length === 0
-        ? emptyPage
-          ? "이 페이지에는 행이 없습니다. 이전 페이지로 돌아가세요."
-          : "조건에 맞는 데이터가 없습니다."
-        : "정상",
+      status === "empty_page"
+        ? "이 페이지에는 행이 없습니다. 이전 페이지로 돌아가세요."
+        : status === "no_data"
+          ? "조건에 맞는 데이터가 없습니다."
+          : "정상",
     httpCode,
     elapsedMs,
     totalCount,

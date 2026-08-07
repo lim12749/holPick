@@ -172,6 +172,21 @@ export const DEFAULT_MEET = "1";
 export const MAX_QUERY_LENGTH = 50;
 
 /**
+ * 검색어를 길이 제한에 맞춰 자른다.
+ *
+ * `String.slice` 는 코드 유닛 단위라 이모지 같은 서로게이트 페어를 반토막 낸다.
+ * 그렇게 남은 고립 서로게이트를 `encodeURIComponent` 에 넣으면 URIError 가 던져져
+ * 페이지 전체가 오류 화면으로 떨어진다. 반드시 코드포인트 단위로 자른다.
+ */
+export function truncateQuery(raw: string | undefined): string {
+  const trimmed = (raw ?? "").trim();
+  const points = Array.from(trimmed);
+  return points.length <= MAX_QUERY_LENGTH
+    ? trimmed
+    : points.slice(0, MAX_QUERY_LENGTH).join("");
+}
+
+/**
  * URL 쿼리의 page 값을 정수 페이지 번호로 정규화한다.
  *
  * `Number()` 만 쓰면 `?page=2.5` 나 `?page=1e9` 가 그대로 API 로 나간다.
