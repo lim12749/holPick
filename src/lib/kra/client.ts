@@ -2,7 +2,8 @@
  * 한국마사회 공공데이터 API 클라이언트. **서버 전용.**
  *
  * 이 모듈은 Server Component / Server Action 에서만 import 한다.
- * 인증키가 브라우저 번들에 들어가면 안 되므로 "use client" 파일에서 부르지 말 것.
+ * 인증키가 브라우저 번들에 들어가면 안 되므로 클라이언트 컴포넌트에서 부르지 말 것.
+ * (이 파일 어디에도 클라이언트 지시어를 넣어서는 안 된다.)
  */
 
 import { getDataset, type KraDataset } from "./datasets";
@@ -22,9 +23,27 @@ function encodeServiceKey(key: string): string {
   return ALREADY_ENCODED.test(key) ? key : encodeURIComponent(key);
 }
 
-/** 화면·로그에 노출해도 안전하도록 인증키를 가린다. */
-function maskKey(url: string): string {
-  return url.replace(/serviceKey=[^&]*/, "serviceKey=***");
+/**
+ * 화면·로그에 노출해도 안전하도록 인증키를 가린다.
+ *
+ * URL 뿐 아니라 API 응답 본문에도 적용한다. 오류 본문이 요청 내용을 되비추는
+ * 경우가 있어, 화면에 그대로 띄우기 전에 반드시 이 함수를 통과시킨다.
+ */
+function maskKey(text: string): string {
+  let masked = text.replace(/serviceKey=[^&\s"'<]*/gi, "serviceKey=***");
+  // 쿼리 파라미터 형태가 아니더라도 키 값 자체가 섞여 있으면 지운다.
+  const key = process.env.KRA_API_KEY?.trim();
+  if (key && key.length > 8) {
+    masked = masked.split(key).join("***");
+    // Encoding/Decoding 어느 쪽으로 들어와도 잡히도록 반대 형태도 함께 지운다.
+    try {
+      const alt = key.includes("%") ? decodeURIComponent(key) : encodeURIComponent(key);
+      if (alt !== key) masked = masked.split(alt).join("***");
+    } catch {
+      // 디코딩할 수 없는 키라면 원본 치환만으로 충분하다.
+    }
+  }
+  return masked;
 }
 
 interface ErrorMapping {
@@ -245,6 +264,7 @@ export async function callDataset(dataset: KraDataset, opts: CallOptions = {}): 
         "XML 응답을 받았습니다.",
         "_type=json 파라미터가 전달되는지 확인하세요. 일부 데이터셋은 XML 만 제공합니다.",
       ),
+      code: code ?? undefined,
       httpCode,
       elapsedMs,
       maskedUrl,
@@ -256,7 +276,8 @@ export async function callDataset(dataset: KraDataset, opts: CallOptions = {}): 
     json = JSON.parse(text);
   } catch {
     return {
-      ...emptyResult("parse_error", "응답을 JSON 으로 해석하지 못했습니다.", text.slice(0, 200)),
+      // 응답 본문을 화면에 보여주므로 반드시 마스킹을 거친다.
+      ...emptyResult("parse_error", "응답을 JSON 으로 해석하지 못했습니다.", maskKey(text).slice(0, 200)),
       httpCode,
       elapsedMs,
       maskedUrl,
