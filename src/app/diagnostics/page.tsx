@@ -96,6 +96,7 @@ function ResultCard({
       )}
 
       <div className="mt-auto flex items-center gap-3 pt-1 text-xs">
+        {/* 진단은 항상 1페이지만 조회하므로 empty_page 는 발생하지 않는다. */}
         {result.status === "ok" || result.status === "no_data" ? (
           <Link href={`/datasets/${datasetId}`} className="text-accent hover:underline">
             데이터 보기 →

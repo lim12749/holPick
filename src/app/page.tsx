@@ -42,6 +42,8 @@ export default async function HomePage() {
 
         <ul className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
           {results.map(({ dataset, result }) => {
+            // empty_page 는 여기서 나올 수 없다 — probeDataset 은 pageNo 를 넘기지 않아
+            // 항상 1페이지이고, empty_page 판정에는 pageNo > 1 이 필요하다.
             const browsable = result.status === "ok" || result.status === "no_data";
             const content = (
               <div className="flex h-full items-center justify-between gap-3 rounded-md border border-border bg-surface-muted px-3 py-2.5">
