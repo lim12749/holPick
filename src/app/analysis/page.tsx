@@ -54,7 +54,14 @@ function RateTable({
             {shown.map((e) => (
               <tr key={e.key} className="border-b border-border last:border-0">
                 <td className="whitespace-nowrap px-2 py-1.5">{e.key}</td>
-                <td className="px-2 py-1.5 text-right">{e.starts}</td>
+                {/* 표본이 작으면 비율이 요동친다. 눈으로 바로 걸러낼 수 있게 표시한다. */}
+                <td
+                  className={`px-2 py-1.5 text-right ${e.starts < 200 ? "text-warn" : ""}`}
+                  title={e.starts < 200 ? "표본 200 미만 — 우연일 수 있습니다" : undefined}
+                >
+                  {e.starts}
+                  {e.starts < 200 && <span className="ml-0.5 text-xs">!</span>}
+                </td>
                 <td className="px-2 py-1.5 text-right">{e.first}</td>
                 <td className="px-2 py-1.5 text-right">{e.second}</td>
                 <td className="px-2 py-1.5 text-right">{e.third}</td>
@@ -125,7 +132,7 @@ export default async function AnalysisPage() {
         />
         <RateTable
           title="각질 × 페이스"
-          note="경주 내 선행형이 몇 두인지에 따라 각질별 성적이 달라지는지 봅니다. 선행마가 몰리면 초반이 과열되어 추입형이 유리해진다는 통념을 검증합니다. 표본이 200 미만인 조합은 신뢰하지 마세요."
+          note="선행마가 몰리면 초반이 과열된다는 통념을 검증합니다. 6개월 기준으로 확인된 것은 절반뿐입니다 — 선행형이 몰릴수록 선행형 자신의 성적은 35.2%→23.2%로 떨어지고 이 차이는 통계적으로 유의합니다(z=2.29). 반면 추입형이 반사이익을 얻는다는 부분은 11.7%→13.0%로 표본 69개에 신뢰구간이 5~21%라 우연과 구분되지 않습니다(z=0.31). 표본이 200 미만인 행은 근거로 쓰지 마세요."
           entries={[...stats.stylePace].sort((a, b) => a.key.localeCompare(b.key, "ko"))}
           limit={16}
           base={stats.base}
