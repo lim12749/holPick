@@ -1,11 +1,12 @@
 import { num, str } from "./horse";
+import type { StyleHistory } from "./style";
 import type { KraRow } from "./types";
 
 /**
  * 과거 경주기록 집계.
  *
- * 모든 비율은 **3착 이내** 기준이다. 관측된 전체 기저율은 30.5% 로, 한 경주에
- * 평균 9.8두가 나와 3/9.8 에 해당한다.
+ * 모든 비율은 **복승(2착 이내)** 기준이다. 실제로 베팅할 종목이 복승식이라
+ * 타깃을 여기에 맞춘다. 관측 기저율은 19.6%(2 ÷ 평균두수 10.2).
  *
  * 핵심은 표본이 작은 항목을 그대로 믿지 않는 것이다. 3전 2착인 기수를 66%로
  * 두면 예측이 그 기수에 끌려간다. 축소추정으로 기저율 쪽으로 당긴다.
@@ -19,20 +20,22 @@ export interface Tally {
   first: number;
   second: number;
   third: number;
-  /** 3착 이내 횟수. */
+  /** 복승 적중(1~2착) 횟수. 예측 타깃이다. */
+  top2: number;
+  /** 3착 이내 횟수. 화면 표시용으로만 남긴다. */
   top3: number;
 }
 
 export interface RateEntry extends Tally {
   key: string;
-  /** 원시 3착이내율. 표본이 작으면 요동친다. */
+  /** 원시 복승 적중률. 표본이 작으면 요동친다. */
   raw: number;
-  /** 축소추정된 3착이내율. 예측에는 이 값을 쓴다. */
+  /** 축소추정된 복승 적중률. 예측에는 이 값을 쓴다. */
   adjusted: number;
 }
 
 function emptyTally(): Tally {
-  return { starts: 0, first: 0, second: 0, third: 0, top3: 0 };
+  return { starts: 0, first: 0, second: 0, third: 0, top2: 0, top3: 0 };
 }
 
 function add(t: Tally, ord: number): void {
@@ -40,6 +43,7 @@ function add(t: Tally, ord: number): void {
   if (ord === 1) t.first += 1;
   else if (ord === 2) t.second += 1;
   else if (ord === 3) t.third += 1;
+  if (ord >= 1 && ord <= 2) t.top2 += 1;
   if (ord >= 1 && ord <= 3) t.top3 += 1;
 }
 
@@ -52,12 +56,12 @@ export function shrink(hits: number, starts: number, base: number, k = SHRINK_K)
   return (hits + k * base) / (starts + k);
 }
 
-/** 전체 3착이내 기저율. 모든 축소추정의 기준점이 된다. */
-export function baseTop3Rate(rows: KraRow[]): number {
+/** 전체 복승(2착 이내) 기저율. 모든 축소추정의 기준점이 된다. */
+export function baseTop2Rate(rows: KraRow[]): number {
   if (rows.length === 0) return 0;
   const hits = rows.filter((r) => {
     const o = num(r.ord);
-    return o >= 1 && o <= 3;
+    return o >= 1 && o <= 2;
   }).length;
   return hits / rows.length;
 }
@@ -81,8 +85,8 @@ export function tallyBy(
     .map(([key, t]) => ({
       key,
       ...t,
-      raw: t.starts > 0 ? t.top3 / t.starts : 0,
-      adjusted: shrink(t.top3, t.starts, base),
+      raw: t.starts > 0 ? t.top2 / t.starts : 0,
+      adjusted: shrink(t.top2, t.starts, base),
     }))
     .sort((a, b) => b.adjusted - a.adjusted);
 }
@@ -173,24 +177,37 @@ export interface StatsBundle {
   budamBand: RateEntry[];
   /** 확정배당 인기순위별 실제 적중률. 시장이 얼마나 맞히는지 보여준다. */
   favouriteRank: RateEntry[];
+  /** 각질 성향별. 경주 시점 이전 이력으로만 판정한 값이라 누수가 없다. */
+  runningStyle: RateEntry[];
+  /** 각질 × 페이스 교차. 선행마가 몰릴 때 추입이 유리해지는지 확인한다. */
+  stylePace: RateEntry[];
+  /** 각질 성향이 매겨진 행 수. 표본 충분성 판단용. */
+  styleCovered: number;
 }
 
-export function buildStatsBundle(rows: KraRow[]): StatsBundle {
-  const base = baseTop3Rate(rows);
+export function buildStatsBundle(rows: KraRow[], styleHistory?: StyleHistory): StatsBundle {
+  const base = baseTop2Rate(rows);
   const races = groupRows(rows);
 
   // 경주 내 상대 지표는 경주 단위로 계산해 행에 되붙인다.
   const withRank: KraRow[] = [];
-  for (const race of races.values()) {
+  let styleCovered = 0;
+  for (const [key, race] of races) {
+    const snapshot = styleHistory?.byRace.get(key);
     for (const row of race) {
       const minBudam = Math.min(...race.map((r) => num(r.wgBudam)).filter((v) => v > 0));
       const myBudam = num(row.wgBudam);
+      // 각질은 이 경주 **이전** 이력으로 만든 스냅샷에서 가져온다. 사후 정보가 아니다.
+      const style = snapshot?.styleByHorse.get(str(row.hrNo)) ?? null;
+      if (style) styleCovered += 1;
       withRank.push({
         ...row,
         __ratingRank: ratingRankInRace(race, row),
         __favRank: favouriteRankInRace(race, row),
         __budamBand:
           myBudam > 0 && Number.isFinite(minBudam) ? budamBand(myBudam - minBudam) : null,
+        __style: style,
+        __pace: snapshot?.pace ?? null,
       });
     }
   }
@@ -219,5 +236,12 @@ export function buildStatsBundle(rows: KraRow[]): StatsBundle {
     restBand: tallyBy(rows, (r) => restBand(num(r.ilsu)), base),
     budamBand: tallyBy(withRank, (r) => (r.__budamBand as string | null) ?? null, base),
     favouriteRank: tallyBy(withRank, (r) => (r.__favRank ? `인기 ${r.__favRank}위` : null), base),
+    runningStyle: tallyBy(withRank, (r) => (r.__style as string | null) ?? null, base),
+    stylePace: tallyBy(
+      withRank,
+      (r) => (r.__style && r.__pace ? `${r.__pace} · ${r.__style}` : null),
+      base,
+    ),
+    styleCovered,
   };
 }

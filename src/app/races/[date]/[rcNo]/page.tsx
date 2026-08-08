@@ -12,6 +12,8 @@ import {
 import { formatPrize, formatRate, str } from "@/lib/kra/horse";
 import { loadRecentResults } from "@/lib/kra/history";
 import { predictRace, type Candidate } from "@/lib/kra/predict";
+import { quinellaPicks } from "@/lib/kra/quinella";
+import { buildStyleHistory, STYLE_DESCRIPTION } from "@/lib/kra/style";
 import { buildStatsBundle } from "@/lib/kra/stats";
 import {
   formatRaceTime,
@@ -55,7 +57,7 @@ export default async function RaceEntryPage({
   const [entryResult, resultResult, history] = await Promise.all([
     callKra("entry-list", { ...CALL_OPTS, extra: { rc_date: date } }),
     callKra("race-result", { ...CALL_OPTS, extra: { rc_date: date } }),
-    loadRecentResults(3),
+    loadRecentResults(),
   ]);
 
   /*
@@ -64,7 +66,9 @@ export default async function RaceEntryPage({
    * 화면의 확률이 실제보다 좋아 보이게 된다.
    */
   const priorRows = history.rows.filter((r) => str(r.rcDate) < date);
-  const stats = priorRows.length > 0 ? buildStatsBundle(priorRows) : null;
+  // 각질 이력도 이전 기록만으로 만든다.
+  const styleHistory = buildStyleHistory(priorRows);
+  const stats = priorRows.length > 0 ? buildStatsBundle(priorRows, styleHistory) : null;
 
   const race = groupByRace(entryResult.rows).find((r) => r.card.rcNo === raceNo) ?? null;
   const resultGroup = groupResultsByRace(resultResult.rows).find((g) => g.info.rcNo === raceNo) ?? null;
@@ -111,10 +115,9 @@ export default async function RaceEntryPage({
     trName: r.entry?.trName ?? r.result?.trName ?? "",
     restDays: r.entry?.restDays ?? 0,
     lastYearStarts: r.entry?.lastYear.starts ?? 0,
-    lastYearTop3:
-      (r.entry?.lastYear.first ?? 0) +
-      (r.entry?.lastYear.second ?? 0) +
-      (r.entry?.lastYear.third ?? 0),
+    // 복승이 타깃이므로 최근 1년도 1·2착만 센다.
+    lastYearTop2: (r.entry?.lastYear.first ?? 0) + (r.entry?.lastYear.second ?? 0),
+    style: styleHistory.finalStyle.get(r.hrNo) ?? null,
   }));
 
   const predictions =
@@ -123,6 +126,8 @@ export default async function RaceEntryPage({
       : [];
   const predByHr = new Map(predictions.map((p) => [p.hrNo, p]));
   const hasPrediction = predictions.length > 0;
+  // 복승은 두 마리를 고르는 베팅이라 말별 확률만으로는 마권을 살 수 없다.
+  const picks = hasPrediction ? quinellaPicks(predictions, 5) : [];
 
   const title = `${formatRaceDate(date)} ${raceNo}경주`;
   const description = [
@@ -143,7 +148,12 @@ export default async function RaceEntryPage({
     ["레이팅", "right"],
     ["기수", "left"],
     ["조교사", "left"],
-    ...(hasPrediction ? ([["3착이내 예측", "right"]] as [string, "left" | "right"][]) : []),
+    ...(hasPrediction
+      ? ([
+          ["각질", "left"],
+          ["복승 예측", "right"],
+        ] as [string, "left" | "right"][])
+      : []),
     ...(finished
       ? ([
           ["기록", "right"],
@@ -267,6 +277,19 @@ export default async function RaceEntryPage({
                   <td className="whitespace-nowrap px-3 py-2">{e?.trName || res?.trName || "—"}</td>
 
                   {hasPrediction && (
+                    <td className="whitespace-nowrap px-3 py-2">
+                      {predByHr.get(r.hrNo)?.style ? (
+                        <span title={STYLE_DESCRIPTION[predByHr.get(r.hrNo)!.style!]}>
+                          {predByHr.get(r.hrNo)!.style}
+                        </span>
+                      ) : (
+                        <span className="text-muted" title="과거 출전 기록이 없어 판정 불가">
+                          —
+                        </span>
+                      )}
+                    </td>
+                  )}
+                  {hasPrediction && (
                     <td className="whitespace-nowrap px-3 py-2 text-right">
                       {(() => {
                         const p = predByHr.get(r.hrNo);
@@ -276,7 +299,7 @@ export default async function RaceEntryPage({
                             className={`font-semibold ${p.rank <= 3 ? "text-accent" : "text-muted"}`}
                             title={`예측 ${p.rank}위${p.ratingImputed ? " · 레이팅 미산정(중앙값 대체)" : ""}`}
                           >
-                            {(p.top3 * 100).toFixed(0)}%
+                            {(p.top2 * 100).toFixed(0)}%
                             {p.ratingImputed && <span className="ml-0.5 text-xs">*</span>}
                           </span>
                         );
@@ -318,11 +341,62 @@ export default async function RaceEntryPage({
         레이팅 0은 미산정을 뜻하므로 결측으로 다뤄야 합니다.
       </p>
 
+      {picks.length > 0 && (
+        <section className="mt-6 rounded-lg border border-border bg-surface p-4">
+          <h2 className="font-medium">복승 조합 추천</h2>
+          <p className="mt-1 text-xs text-muted">
+            1·2착을 차지할 확률이 높은 조합 순입니다. <strong className="font-medium">본전 배당</strong>은
+            확률의 역수로, 실제 배당이 이 값보다 높아야 기대값이 양수입니다.
+          </p>
+          <div className="mt-3 overflow-x-auto">
+            <table className="w-full border-collapse text-sm">
+              <thead>
+                <tr className="bg-surface-muted">
+                  {["순위", "조합", "적중 확률", "본전 배당"].map((h, i) => (
+                    <th
+                      key={h}
+                      scope="col"
+                      className={`whitespace-nowrap border-b border-border px-3 py-2 font-medium ${
+                        i <= 1 ? "text-left" : "text-right"
+                      }`}
+                    >
+                      {h}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {picks.map((p, i) => (
+                  <tr
+                    key={`${p.a.hrNo}-${p.b.hrNo}`}
+                    className="border-b border-border last:border-0"
+                  >
+                    <td className="px-3 py-2 font-medium">{i + 1}</td>
+                    <td className="px-3 py-2">
+                      <span className="font-medium">
+                        {p.a.chulNo}·{p.b.chulNo}
+                      </span>
+                      <span className="ml-2 text-muted">
+                        {p.a.hrName} — {p.b.hrName}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2 text-right font-semibold">
+                      {(p.prob * 100).toFixed(1)}%
+                    </td>
+                    <td className="px-3 py-2 text-right">{p.fairOdds.toFixed(1)}배</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
       {hasPrediction && (
         <p className="mt-2 rounded-lg border border-border bg-surface-muted px-4 py-3 text-xs text-muted">
-          <strong className="font-medium text-foreground">3착이내 예측</strong>은 이 경주일{" "}
+          <strong className="font-medium text-foreground">복승 예측</strong>은 이 경주일{" "}
           <strong className="font-medium text-foreground">이전</strong> 기록만으로 만든 통계에
-          레이팅·최근폼·기수·조교사·부담중량·게이트·휴양 7개 요인을 가중 합산한 값입니다. 배당률은
+          레이팅·최근폼·각질·기수·조교사·부담중량·게이트·휴양 8개 요인을 가중 합산한 2착 이내 확률입니다. 배당률은
           경주가 끝나야 확정되므로 입력에 넣지 않았습니다. <code className="font-mono">*</code> 는
           레이팅 미산정이라 경주 내 중앙값으로 대체했다는 표시입니다.{" "}
           <Link href="/analysis/backtest" className="text-accent hover:underline">

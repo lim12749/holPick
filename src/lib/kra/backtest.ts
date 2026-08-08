@@ -1,25 +1,29 @@
+import type { QuinellaDividend } from "./dividend";
 import { num, str } from "./horse";
 import { predictRace, type Candidate, type Weights } from "./predict";
+import { pairKey, quinellaPicks } from "./quinella";
 import { buildStatsBundle, groupRows } from "./stats";
+import { buildStyleHistory, RUNNING_STYLES, type RunningStyle } from "./style";
 import type { KraRow } from "./types";
 
 /**
- * 시간 분할 백테스트.
+ * 시간 분할 백테스트 — 복승식(1·2착) 기준.
  *
  * 두 가지를 반드시 지킨다.
  *
  * 1. **시간 순 분할.** 앞 기간으로 통계를 만들고 뒤 기간을 맞힌다. 무작위 분할은
  *    미래 정보로 과거를 맞히는 꼴이라 성능이 허수로 부풀려진다.
  * 2. **누수 차단.** 예측 입력에는 경주 전에 알 수 없는 값(`ord`, `winOdds`,
- *    `rcTime`, `diffUnit`)을 절대 넣지 않는다. 아래 buildCandidate 가 그 경계다.
+ *    `rcTime`, `diffUnit`)을 절대 넣지 않는다. 각질도 그 경주 **이전** 이력으로만
+ *    만든 스냅샷을 쓴다. 아래 buildCandidate 가 그 경계다.
  */
 
 export interface BacktestMetrics {
   races: number;
   runners: number;
-  /** 예측 상위 3두 중 실제 3착 이내였던 두수의 평균. 무작위 기대값은 3×기저율. */
-  top3HitAvg: number;
-  /** 예측 1위가 실제 3착 이내였던 비율. */
+  /** 예측 상위 2두 중 실제 1·2착이었던 두수의 평균. 무작위 기대값은 2×기저율. */
+  top2HitAvg: number;
+  /** 예측 1위가 실제 2착 이내였던 비율. */
   topPickHitRate: number;
   brier: number;
   logLoss: number;
@@ -34,23 +38,32 @@ export interface BacktestReport {
   trainMonths: string[];
   testMonths: string[];
   model: BacktestMetrics;
-  /** 레이팅만으로 순위를 매긴 단순 기준. */
   ratingOnly: BacktestMetrics;
+  /** 각질 성향만으로 순위를 매긴 기준. 각질만으로 충분하면 나머지는 군더더기다. */
+  styleOnly: BacktestMetrics;
   /** 확정배당 인기순. 사후 정보라 사실상 상한선이다. */
   favourite: BacktestMetrics;
-  randomTop3HitAvg: number;
-  /** 예측 1위에 연승 베팅했을 때 수익률. 1.0 이면 본전. */
-  roiTopPick: number | null;
+  randomTop2HitAvg: number;
+  /** 추천 1순위 복승 조합이 실제 1·2착과 일치한 비율. */
+  quinellaHitRate: number;
+  /** 복승 조합을 판정할 수 있었던 경주 수. */
+  quinellaRaces: number;
+  /**
+   * 추천 1순위 조합에 1단위씩 베팅했을 때 회수율. 1.0 이면 본전.
+   * 확정 복승배당을 못 구한 경우 null.
+   */
+  quinellaRoi: number | null;
+  quinellaBets: number;
 }
 
 /**
  * 경주기록 행에서 예측 입력을 만든다.
  *
  * **여기가 누수 경계다.** ord·winOdds·plcOdds·rcTime·diffUnit 은 읽지 않는다.
- * 백테스트에서는 최근 1년 전적을 알 수 없으므로 0으로 두고, 축소추정이 기저율로
- * 처리하게 한다 — 실제 예측 화면은 출전표에서 이 값을 받는다.
+ * 백테스트에는 출전표의 최근 1년 전적이 없으므로 0으로 두고, predictRace 가
+ * 학습 구간에서 집계한 마필별 성적으로 대체하게 한다.
  */
-function buildCandidate(row: KraRow): Candidate {
+function buildCandidate(row: KraRow, style: RunningStyle | null): Candidate {
   return {
     hrNo: str(row.hrNo),
     hrName: str(row.hrName),
@@ -61,20 +74,21 @@ function buildCandidate(row: KraRow): Candidate {
     trName: str(row.trName),
     restDays: num(row.ilsu),
     lastYearStarts: 0,
-    lastYearTop3: 0,
+    lastYearTop2: 0,
+    style,
   };
 }
 
-function isTop3(row: KraRow): boolean {
+function isTop2(row: KraRow): boolean {
   const o = num(row.ord);
-  return o >= 1 && o <= 3;
+  return o >= 1 && o <= 2;
 }
 
 function emptyMetrics(): BacktestMetrics {
-  return { races: 0, runners: 0, top3HitAvg: 0, topPickHitRate: 0, brier: 0, logLoss: 0 };
+  return { races: 0, runners: 0, top2HitAvg: 0, topPickHitRate: 0, brier: 0, logLoss: 0 };
 }
 
-/** 순위만 주어졌을 때의 지표. 확률이 없는 기준선(레이팅순·인기순)에 쓴다. */
+/** 순위만 주어졌을 때의 지표. 확률이 없는 기준선(레이팅순·각질순·인기순)에 쓴다. */
 function metricsFromOrder(races: KraRow[][], order: (race: KraRow[]) => KraRow[]): BacktestMetrics {
   let hitSum = 0;
   let topHits = 0;
@@ -86,27 +100,31 @@ function metricsFromOrder(races: KraRow[][], order: (race: KraRow[]) => KraRow[]
     if (ranked.length === 0) continue;
     counted += 1;
     runners += race.length;
-    hitSum += ranked.slice(0, 3).filter(isTop3).length;
-    if (isTop3(ranked[0])) topHits += 1;
+    hitSum += ranked.slice(0, 2).filter(isTop2).length;
+    if (isTop2(ranked[0])) topHits += 1;
   }
 
   return {
     races: counted,
     runners,
-    top3HitAvg: counted ? hitSum / counted : 0,
+    top2HitAvg: counted ? hitSum / counted : 0,
     topPickHitRate: counted ? topHits / counted : 0,
     brier: 0,
     logLoss: 0,
   };
 }
 
-/** 검증에 쓸 경주일 비율. 3개월에 경주일이 20일뿐이라 월 단위로 자르면 표본이 말라붙는다. */
+/** 검증에 쓸 경주일 비율. 6개월이라도 서울은 주말만 시행해 경주일이 40일 남짓이다. */
 const TEST_FRACTION = 0.3;
 
-export function runBacktest(rows: KraRow[], weights?: Weights): BacktestReport | null {
-  // 월이 아니라 **경주일** 기준으로 시간 분할한다. 서울은 주말에만 시행해서
-  // 3개월이라도 경주일은 20일 남짓이고, 마지막 달을 통째로 검증에 쓰면
-  // 검증 경주가 10개로 줄어 어떤 결론도 낼 수 없다.
+export interface BacktestInput {
+  rows: KraRow[];
+  /** 경주일별 복승 확정배당. 없으면 ROI 를 계산하지 않는다. */
+  dividends?: Map<string, Map<string, QuinellaDividend>>;
+  weights?: Weights;
+}
+
+export function runBacktest({ rows, dividends, weights }: BacktestInput): BacktestReport | null {
   const dates = [...new Set(rows.map((r) => str(r.rcDate)))].filter(Boolean).sort();
   if (dates.length < 4) return null;
 
@@ -121,43 +139,88 @@ export function runBacktest(rows: KraRow[], weights?: Weights): BacktestReport |
   const trainMonths = [...new Set([...trainDates].map((d) => d.slice(0, 6)))].sort();
   const testMonths = [...new Set([...testDates].map((d) => d.slice(0, 6)))].sort();
 
+  /*
+   * 각질 이력은 전체 구간으로 만들되, 각 경주에는 **그 경주 이전** 스냅샷만
+   * 쓴다. buildStyleHistory 가 경주일 순으로 누적하므로 검증 구간 경주도
+   * 자기 자신이나 이후 경주를 보지 않는다.
+   */
+  const styleHistory = buildStyleHistory(rows);
   // 통계는 학습 기간만으로 만든다. 검증 기간이 섞이면 누수다.
-  const stats = buildStatsBundle(trainRows);
-  const testRaces = [...groupRows(testRows).values()].filter((r) => r.length >= 4);
+  const stats = buildStatsBundle(trainRows, styleHistory);
+
+  /*
+   * **순서 누수 차단.** 경주기록 응답은 100% 착순 순으로 정렬되어 온다.
+   * JS 의 sort 는 안정 정렬이라 동점일 때 원래 순서를 유지하는데, 각질처럼
+   * 범주가 4개뿐인 기준으로 세우면 동점이 대량 발생해 사실상 착순 순으로
+   * 정렬된다. 실제로 이 때문에 각질 단독 1순위 적중률이 60.6% 로 부풀려졌다.
+   * 평가 전에 착순과 무관하고 결정적인 마번 순으로 재배열한다.
+   */
+  const testRaceEntries = [...groupRows(testRows).entries()]
+    .filter(([, r]) => r.length >= 4)
+    .map(([key, r]) => [key, [...r].sort((a, b) => num(a.chulNo) - num(b.chulNo))] as const);
+  const testRaces = testRaceEntries.map(([, r]) => r);
 
   let hitSum = 0;
   let topHits = 0;
   let brierSum = 0;
   let logLossSum = 0;
   let runners = 0;
-  let stake = 0;
-  let ret = 0;
+  let quinellaHits = 0;
+  let quinellaRaces = 0;
+  let bets = 0;
+  let returned = 0;
+  let hadDividend = false;
 
-  for (const race of testRaces) {
-    const candidates = race.map(buildCandidate);
+  for (const [key, race] of testRaceEntries) {
+    const snapshot = styleHistory.byRace.get(key);
+    const candidates = race.map((r) =>
+      buildCandidate(r, snapshot?.styleByHorse.get(str(r.hrNo)) ?? null),
+    );
     const preds = predictRace(candidates, stats, num(race[0].rcDist), weights);
     const byHr = new Map(race.map((r) => [str(r.hrNo), r]));
 
     hitSum += preds
-      .slice(0, 3)
+      .slice(0, 2)
       .map((p) => byHr.get(p.hrNo))
       .filter((r): r is KraRow => !!r)
-      .filter(isTop3).length;
+      .filter(isTop2).length;
 
     const top = byHr.get(preds[0]?.hrNo ?? "");
-    if (top) {
-      if (isTop3(top)) topHits += 1;
-      // 연승 베팅 1단위. 적중 시 확정 연승배당을 회수한다.
-      stake += 1;
-      if (isTop3(top)) ret += num(top.plcOdds);
+    if (top && isTop2(top)) topHits += 1;
+
+    // 복승 조합 평가 — 실제 1·2착 마번 쌍과 추천 1순위를 대조한다.
+    const actualPair = race
+      .filter((r) => num(r.ord) >= 1 && num(r.ord) <= 2)
+      .sort((a, b) => num(a.ord) - num(b.ord))
+      .map((r) => num(r.chulNo));
+    if (actualPair.length === 2 && actualPair.every((n) => n > 0)) {
+      quinellaRaces += 1;
+      const picks = quinellaPicks(preds, 1);
+      const pick = picks[0];
+      if (pick) {
+        const picked = pairKey(pick.a.chulNo, pick.b.chulNo);
+        const actual = pairKey(actualPair[0], actualPair[1]);
+        const won = picked === actual;
+        if (won) quinellaHits += 1;
+
+        const dayDividends = dividends?.get(str(race[0].rcDate));
+        if (dayDividends) {
+          hadDividend = true;
+          bets += 1;
+          if (won) {
+            const d = dayDividends.get(`${num(race[0].rcNo)}:${actual}`);
+            if (d) returned += d.odds;
+          }
+        }
+      }
     }
 
     for (const p of preds) {
       const row = byHr.get(p.hrNo);
       if (!row) continue;
       runners += 1;
-      const actual = isTop3(row) ? 1 : 0;
-      const q = Math.min(Math.max(p.top3, 0.001), 0.999);
+      const actual = isTop2(row) ? 1 : 0;
+      const q = Math.min(Math.max(p.top2, 0.001), 0.999);
       brierSum += (q - actual) ** 2;
       logLossSum += -(actual * Math.log(q) + (1 - actual) * Math.log(1 - q));
     }
@@ -168,7 +231,7 @@ export function runBacktest(rows: KraRow[], weights?: Weights): BacktestReport |
     ? {
         races: n,
         runners,
-        top3HitAvg: hitSum / n,
+        top2HitAvg: hitSum / n,
         topPickHitRate: topHits / n,
         brier: runners ? brierSum / runners : 0,
         logLoss: runners ? logLossSum / runners : 0,
@@ -178,14 +241,27 @@ export function runBacktest(rows: KraRow[], weights?: Weights): BacktestReport |
   const ratingOnly = metricsFromOrder(testRaces, (race) =>
     [...race].filter((r) => num(r.rating) > 0).sort((a, b) => num(b.rating) - num(a.rating)),
   );
+
+  // 각질 단독: 선행형 → 선입형 → 중위형 → 추입형 순으로 세운다.
+  const styleRank = new Map<RunningStyle, number>(RUNNING_STYLES.map((s, i) => [s, i]));
+  const styleOnly = metricsFromOrder(testRaces, (race) => {
+    const key = `${str(race[0].rcDate)}-${num(race[0].rcNo)}`;
+    const snapshot = styleHistory.byRace.get(key);
+    if (!snapshot) return [];
+    const withStyle = race.filter((r) => snapshot.styleByHorse.has(str(r.hrNo)));
+    return withStyle.sort(
+      (a, b) =>
+        (styleRank.get(snapshot.styleByHorse.get(str(a.hrNo))!) ?? 9) -
+        (styleRank.get(snapshot.styleByHorse.get(str(b.hrNo))!) ?? 9),
+    );
+  });
+
   const favourite = metricsFromOrder(testRaces, (race) =>
     [...race].filter((r) => num(r.winOdds) > 0).sort((a, b) => num(a.winOdds) - num(b.winOdds)),
   );
 
-  const base = stats.base;
-
   return {
-    base,
+    base: stats.base,
     trainRows: trainRows.length,
     testRows: testRows.length,
     trainDays: trainDates.size,
@@ -194,8 +270,12 @@ export function runBacktest(rows: KraRow[], weights?: Weights): BacktestReport |
     testMonths,
     model,
     ratingOnly,
+    styleOnly,
     favourite,
-    randomTop3HitAvg: 3 * base,
-    roiTopPick: stake > 0 ? ret / stake : null,
+    randomTop2HitAvg: 2 * stats.base,
+    quinellaHitRate: quinellaRaces ? quinellaHits / quinellaRaces : 0,
+    quinellaRaces,
+    quinellaRoi: hadDividend && bets > 0 ? returned / bets : null,
+    quinellaBets: bets,
   };
 }

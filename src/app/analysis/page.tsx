@@ -2,12 +2,12 @@ import Link from "next/link";
 import { PageHeader } from "@/components/PageHeader";
 import { loadRecentResults } from "@/lib/kra/history";
 import { buildStatsBundle, type RateEntry } from "@/lib/kra/stats";
+import { buildStyleHistory, RUNNING_STYLES } from "@/lib/kra/style";
 
 export const dynamic = "force-dynamic";
 
 export const metadata = { title: "분석 — holPick" };
 
-const MONTHS = 3;
 
 function pct(v: number): string {
   return `${(v * 100).toFixed(1)}%`;
@@ -37,7 +37,7 @@ function RateTable({
         <table className="w-full border-collapse text-sm">
           <thead>
             <tr className="bg-surface-muted">
-              {["항목", "출주", "1착", "2착", "3착", "3착이내", "원시", "축소추정"].map((h, i) => (
+              {["항목", "출주", "1착", "2착", "3착", "복승", "원시", "축소추정"].map((h, i) => (
                 <th
                   key={h}
                   scope="col"
@@ -58,7 +58,7 @@ function RateTable({
                 <td className="px-2 py-1.5 text-right">{e.first}</td>
                 <td className="px-2 py-1.5 text-right">{e.second}</td>
                 <td className="px-2 py-1.5 text-right">{e.third}</td>
-                <td className="px-2 py-1.5 text-right font-medium">{e.top3}</td>
+                <td className="px-2 py-1.5 text-right font-medium">{e.top2}</td>
                 <td className="px-2 py-1.5 text-right text-muted">{pct(e.raw)}</td>
                 <td
                   className={`px-2 py-1.5 text-right font-semibold ${
@@ -77,14 +77,16 @@ function RateTable({
 }
 
 export default async function AnalysisPage() {
-  const history = await loadRecentResults(MONTHS);
-  const stats = buildStatsBundle(history.rows);
+  const history = await loadRecentResults();
+  // 각질은 경주일 순 누적 스냅샷이라 이력을 먼저 만들고 집계에 넘긴다.
+  const styleHistory = buildStyleHistory(history.rows);
+  const stats = buildStatsBundle(history.rows, styleHistory);
 
   return (
     <>
       <PageHeader
-        title="3개월 분석"
-        description="서울 경마장 최근 3개월 시행 기록. 모든 비율은 3착 이내 기준입니다."
+        title="6개월 분석"
+        description="서울 경마장 최근 6개월 시행 기록. 모든 비율은 복승(2착 이내) 기준입니다."
         actions={
           <Link href="/analysis/backtest" className="text-sm text-accent hover:underline">
             검증 결과 →
@@ -97,7 +99,7 @@ export default async function AnalysisPage() {
           ["대상 월", history.months.join(" · ")],
           ["경주 수", `${stats.totalRaces.toLocaleString("ko-KR")}경주`],
           ["출주 행", `${stats.totalRows.toLocaleString("ko-KR")}두`],
-          ["기저율", pct(stats.base)],
+          ["복승 기저율", pct(stats.base)],
         ].map(([k, v]) => (
           <div key={k} className="rounded-lg border border-border bg-surface px-4 py-3">
             <p className="text-xs text-muted">{k}</p>
@@ -113,6 +115,21 @@ export default async function AnalysisPage() {
       </p>
 
       <div className="grid gap-4">
+        <RateTable
+          title="각질(주행 스타일)별"
+          note={`해당 경주 이전 이력으로만 판정했으므로 예측에 그대로 쓸 수 있습니다. 성향이 매겨진 행 ${stats.styleCovered.toLocaleString("ko-KR")}개 / 전체 ${stats.totalRows.toLocaleString("ko-KR")}개 (첫 출전 말은 성향이 없습니다).`}
+          entries={[...stats.runningStyle].sort(
+            (a, b) => RUNNING_STYLES.indexOf(a.key as never) - RUNNING_STYLES.indexOf(b.key as never),
+          )}
+          base={stats.base}
+        />
+        <RateTable
+          title="각질 × 페이스"
+          note="경주 내 선행형이 몇 두인지에 따라 각질별 성적이 달라지는지 봅니다. 선행마가 몰리면 초반이 과열되어 추입형이 유리해진다는 통념을 검증합니다. 표본이 200 미만인 조합은 신뢰하지 마세요."
+          entries={[...stats.stylePace].sort((a, b) => a.key.localeCompare(b.key, "ko"))}
+          limit={16}
+          base={stats.base}
+        />
         <RateTable
           title="확정배당 인기순위별 적중률"
           note="시장이 실제로 얼마나 맞히는지. 배당은 경주가 끝나야 확정되므로 예측 입력이 아니라 비교 기준입니다."

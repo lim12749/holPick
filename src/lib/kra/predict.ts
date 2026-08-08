@@ -6,6 +6,7 @@ import {
   type RateEntry,
   type StatsBundle,
 } from "./stats";
+import type { RunningStyle } from "./style";
 
 /**
  * 3착 이내 확률 추정.
@@ -36,12 +37,17 @@ export interface Candidate {
   trName: string;
   restDays: number;
   lastYearStarts: number;
-  lastYearTop3: number;
+  /** 최근 1년 2착 이내 횟수 (1착 + 2착). 복승이 타깃이므로 3착은 세지 않는다. */
+  lastYearTop2: number;
+  /** 과거 이력으로 판정한 각질. 첫 출전이면 null. */
+  style: RunningStyle | null;
 }
 
 export interface Weights {
   ratingRank: number;
   recentForm: number;
+  /** 각질 성향. 실측 신호가 커서(선행형 27.5% vs 추입형 12.9%) 비중이 높다. */
+  style: number;
   jockey: number;
   trainer: number;
   budam: number;
@@ -55,11 +61,12 @@ export interface Weights {
  * 예측력이 높다. 게이트·휴양은 부수적이다.
  */
 export const DEFAULT_WEIGHTS: Weights = {
-  ratingRank: 0.35,
-  recentForm: 0.25,
-  jockey: 0.15,
-  trainer: 0.1,
-  budam: 0.08,
+  ratingRank: 0.3,
+  recentForm: 0.22,
+  style: 0.18,
+  jockey: 0.12,
+  trainer: 0.08,
+  budam: 0.06,
   gate: 0.04,
   rest: 0.03,
 };
@@ -68,12 +75,15 @@ export interface Prediction {
   hrNo: string;
   hrName: string;
   chulNo: number;
-  /** 3착 이내 확률 (0~1). */
-  top3: number;
+  /** 복승(2착 이내) 확률 (0~1). 한 경주 합이 2.0 근처가 된다. */
+  top2: number;
+  /** 우승 확률. 복승 조합 확률(Harville)을 계산할 때 쓴다. 합이 1.0. */
+  win: number;
   /** 확률 내림차순 순위. */
   rank: number;
   /** 레이팅이 미산정이라 중앙값으로 대체했는지. 화면에서 밝힌다. */
   ratingImputed: boolean;
+  style: RunningStyle | null;
 }
 
 function toLookup(entries: RateEntry[]): Map<string, number> {
@@ -120,6 +130,7 @@ export function predictRace(
   const ratingRankMap = toLookup(stats.ratingRank);
   const restMap = toLookup(stats.restBand);
   const budamMap = toLookup(stats.budamBand);
+  const styleMap = toLookup(stats.runningStyle);
 
   const ratings = imputeRatings(candidates);
   const band = distanceBand(rcDist);
@@ -142,8 +153,10 @@ export function predictRace(
      */
     const pForm =
       c.lastYearStarts > 0
-        ? shrink(c.lastYearTop3, c.lastYearStarts, base)
+        ? shrink(c.lastYearTop2, c.lastYearStarts, base)
         : lookup(horseMap, c.hrNo, base);
+    // 각질을 모르는 말(첫 출전)은 기저율로 둔다. 불리하게 깎지 않는다.
+    const pStyle = c.style ? lookup(styleMap, c.style, base) : base;
     const pJockey = lookup(jockeyMap, c.jkName, base);
     const pTrainer = lookup(trainerMap, c.trName, base);
     const pBudam =
@@ -156,6 +169,7 @@ export function predictRace(
     const s =
       weights.ratingRank * logit(pRatingRank) +
       weights.recentForm * logit(pForm) +
+      weights.style * logit(pStyle) +
       weights.jockey * logit(pJockey) +
       weights.trainer * logit(pTrainer) +
       weights.budam * logit(pBudam) +
@@ -174,13 +188,15 @@ export function predictRace(
     hrNo: c.hrNo,
     hrName: c.hrName,
     chulNo: c.chulNo,
-    // 한 경주의 3착 이내는 3두이므로 3배 스케일한다.
-    top3: Math.min(Math.max((3 * exps[i]) / sum, 0.01), 0.95),
+    // 한 경주의 복승 적중은 2두이므로 2배 스케일한다. 우승 확률은 스케일 없이 그대로.
+    top2: Math.min(Math.max((2 * exps[i]) / sum, 0.01), 0.95),
+    win: exps[i] / sum,
     rank: 0,
     ratingImputed: ratings[i].imputed,
+    style: c.style,
   }));
 
   return [...withProb]
-    .sort((a, b) => b.top3 - a.top3)
+    .sort((a, b) => b.top2 - a.top2)
     .map((p, i) => ({ ...p, rank: i + 1 }));
 }

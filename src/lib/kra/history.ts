@@ -29,7 +29,13 @@ export function recentMonths(n: number, from = currentYearMonthKst()): string[] 
   return Array.from({ length: n }, (_, i) => shiftMonth(from, -i)).reverse();
 }
 
-export async function loadRecentResults(n = 3, fresh = false): Promise<HistoryLoad> {
+/** 기본 6개월. 3개월은 경주일이 20일뿐이라 각질·페이스 표본이 부족했다. */
+export const DEFAULT_MONTHS = 6;
+
+export async function loadRecentResults(
+  n = DEFAULT_MONTHS,
+  fresh = false,
+): Promise<HistoryLoad> {
   const current = currentYearMonthKst();
   const months = recentMonths(n, current);
 
