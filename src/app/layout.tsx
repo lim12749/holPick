@@ -22,6 +22,7 @@ const NAV = [
   { href: "/", label: "홈" },
   // 출전표가 예측의 주 진입점이라 가장 앞에 둔다.
   { href: "/races", label: "출전표" },
+  { href: "/analysis", label: "분석" },
   { href: "/horses", label: "경주마" },
   { href: "/diagnostics", label: "API 진단" },
 ] as const;

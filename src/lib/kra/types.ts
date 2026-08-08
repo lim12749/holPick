@@ -45,6 +45,9 @@ export interface KraResult {
   /** 실제로 호출한 경로와 그 출처. 진단 화면에서 env 오버라이드 여부를 보여준다. */
   path?: string;
   pathSource?: "env" | "default";
+  /** 디스크 캐시에서 읽었는지. 호출 한도 절약이 실제로 되는지 확인용. */
+  fromCache?: boolean;
+  cacheAgeMs?: number | null;
 }
 
 export type ColumnAlign = "left" | "right";

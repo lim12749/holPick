@@ -9,7 +9,10 @@ import {
   groupByRace,
   type Entry,
 } from "@/lib/kra/entry";
-import { formatPrize, formatRate } from "@/lib/kra/horse";
+import { formatPrize, formatRate, str } from "@/lib/kra/horse";
+import { loadRecentResults } from "@/lib/kra/history";
+import { predictRace, type Candidate } from "@/lib/kra/predict";
+import { buildStatsBundle } from "@/lib/kra/stats";
 import {
   formatRaceTime,
   groupResultsByRace,
@@ -49,10 +52,19 @@ export default async function RaceEntryPage({
   if (!/^\d{8}$/.test(date) || !/^\d{1,2}$/.test(rcNo)) notFound();
   const raceNo = Number(rcNo);
 
-  const [entryResult, resultResult] = await Promise.all([
+  const [entryResult, resultResult, history] = await Promise.all([
     callKra("entry-list", { ...CALL_OPTS, extra: { rc_date: date } }),
     callKra("race-result", { ...CALL_OPTS, extra: { rc_date: date } }),
+    loadRecentResults(3),
   ]);
+
+  /*
+   * 예측에 쓰는 통계는 **이 경주일 이전** 기록만으로 만든다.
+   * 같은 날 또는 이후 결과가 섞이면 자기 자신을 보고 맞히는 셈이라
+   * 화면의 확률이 실제보다 좋아 보이게 된다.
+   */
+  const priorRows = history.rows.filter((r) => str(r.rcDate) < date);
+  const stats = priorRows.length > 0 ? buildStatsBundle(priorRows) : null;
 
   const race = groupByRace(entryResult.rows).find((r) => r.card.rcNo === raceNo) ?? null;
   const resultGroup = groupResultsByRace(resultResult.rows).find((g) => g.info.rcNo === raceNo) ?? null;
@@ -88,6 +100,30 @@ export default async function RaceEntryPage({
   const card = race?.card ?? null;
   const info = resultGroup?.info ?? null;
 
+  // 예측 입력은 경주 전에 확보 가능한 값만 쓴다. 착순·배당·주파기록은 넣지 않는다.
+  const candidates: Candidate[] = runners.map((r) => ({
+    hrNo: r.hrNo,
+    hrName: r.hrName,
+    chulNo: r.chulNo,
+    rating: r.entry?.rating ?? r.result?.rating ?? 0,
+    wgBudam: r.entry?.wgBudam ?? r.result?.wgBudam ?? 0,
+    jkName: r.entry?.jkName ?? r.result?.jkName ?? "",
+    trName: r.entry?.trName ?? r.result?.trName ?? "",
+    restDays: r.entry?.restDays ?? 0,
+    lastYearStarts: r.entry?.lastYear.starts ?? 0,
+    lastYearTop3:
+      (r.entry?.lastYear.first ?? 0) +
+      (r.entry?.lastYear.second ?? 0) +
+      (r.entry?.lastYear.third ?? 0),
+  }));
+
+  const predictions =
+    stats && candidates.length > 0
+      ? predictRace(candidates, stats, card?.rcDist || info?.rcDist || 0)
+      : [];
+  const predByHr = new Map(predictions.map((p) => [p.hrNo, p]));
+  const hasPrediction = predictions.length > 0;
+
   const title = `${formatRaceDate(date)} ${raceNo}경주`;
   const description = [
     card?.meet || info?.meet,
@@ -107,6 +143,7 @@ export default async function RaceEntryPage({
     ["레이팅", "right"],
     ["기수", "left"],
     ["조교사", "left"],
+    ...(hasPrediction ? ([["3착이내 예측", "right"]] as [string, "left" | "right"][]) : []),
     ...(finished
       ? ([
           ["기록", "right"],
@@ -229,6 +266,24 @@ export default async function RaceEntryPage({
                   <td className="whitespace-nowrap px-3 py-2">{e?.jkName || res?.jkName || "—"}</td>
                   <td className="whitespace-nowrap px-3 py-2">{e?.trName || res?.trName || "—"}</td>
 
+                  {hasPrediction && (
+                    <td className="whitespace-nowrap px-3 py-2 text-right">
+                      {(() => {
+                        const p = predByHr.get(r.hrNo);
+                        if (!p) return <span className="text-muted">—</span>;
+                        return (
+                          <span
+                            className={`font-semibold ${p.rank <= 3 ? "text-accent" : "text-muted"}`}
+                            title={`예측 ${p.rank}위${p.ratingImputed ? " · 레이팅 미산정(중앙값 대체)" : ""}`}
+                          >
+                            {(p.top3 * 100).toFixed(0)}%
+                            {p.ratingImputed && <span className="ml-0.5 text-xs">*</span>}
+                          </span>
+                        );
+                      })()}
+                    </td>
+                  )}
+
                   {finished && (
                     <>
                       <td className="whitespace-nowrap px-3 py-2 text-right font-mono">
@@ -262,6 +317,20 @@ export default async function RaceEntryPage({
           : "출전번호 순입니다. 부담중량 옆 +숫자는 이 경주 최저 부담중량 대비 편차입니다."}{" "}
         레이팅 0은 미산정을 뜻하므로 결측으로 다뤄야 합니다.
       </p>
+
+      {hasPrediction && (
+        <p className="mt-2 rounded-lg border border-border bg-surface-muted px-4 py-3 text-xs text-muted">
+          <strong className="font-medium text-foreground">3착이내 예측</strong>은 이 경주일{" "}
+          <strong className="font-medium text-foreground">이전</strong> 기록만으로 만든 통계에
+          레이팅·최근폼·기수·조교사·부담중량·게이트·휴양 7개 요인을 가중 합산한 값입니다. 배당률은
+          경주가 끝나야 확정되므로 입력에 넣지 않았습니다. <code className="font-mono">*</code> 는
+          레이팅 미산정이라 경주 내 중앙값으로 대체했다는 표시입니다.{" "}
+          <Link href="/analysis/backtest" className="text-accent hover:underline">
+            검증 결과
+          </Link>
+          를 먼저 보고 신뢰 수준을 판단하세요.
+        </p>
+      )}
     </>
   );
 }

@@ -1,18 +1,20 @@
 import Link from "next/link";
 import { StatusBadge } from "@/components/StatusBadge";
-import { probeDataset } from "@/lib/kra/client";
+import { cachedProbe } from "@/lib/kra/client";
 import { DATASETS } from "@/lib/kra/datasets";
 
 /**
- * 홈은 상태 "요약"이라 실시간일 필요가 없다.
- * 매 방문마다 9개 데이터셋을 조회하면 일일 한도(KRA_DAILY_QUOTA)가 새로고침만으로
- * 고갈되므로 5분간 재사용한다. 지금 상태를 그대로 봐야 할 때는 /diagnostics 로 간다.
+ * 빌드 타임에 프리렌더하지 않는다.
+ *
+ * 홈은 9개 데이터셋을 확인하는데 그중 하나(경주마 성적 정보)는 제공 측이 응답하지
+ * 않아 빌드가 60초를 넘겨 실패했다. 호출 절약은 프리렌더가 아니라 디스크 캐시가
+ * 맡는다 — cachedProbe 가 TTL 안에서는 API 를 부르지 않는다.
  */
-export const revalidate = 300;
+export const dynamic = "force-dynamic";
 
 export default async function HomePage() {
   const results = await Promise.all(
-    DATASETS.map(async (dataset) => ({ dataset, result: await probeDataset(dataset, 300) })),
+    DATASETS.map(async (dataset) => ({ dataset, result: await cachedProbe(dataset) })),
   );
   const okCount = results.filter((r) => r.result.status === "ok").length;
 

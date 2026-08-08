@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { PageHeader } from "@/components/PageHeader";
 import { StatusBadge } from "@/components/StatusBadge";
-import { probeDataset } from "@/lib/kra/client";
+import { cachedProbe } from "@/lib/kra/client";
 import { DATASETS } from "@/lib/kra/datasets";
 import { fieldLabel } from "@/lib/kra/field-labels";
 import type { KraResult } from "@/lib/kra/types";
@@ -85,6 +85,13 @@ function ResultCard({
         </p>
       )}
 
+      {result.fromCache && (
+        <p className="text-xs text-ok">
+          캐시에서 읽음 · API 호출 없음
+          {result.cacheAgeMs != null && ` (${Math.round(result.cacheAgeMs / 1000)}초 전)`}
+        </p>
+      )}
+
       {fields.length > 0 && (
         <details className="text-xs">
           <summary className="cursor-pointer text-muted hover:text-foreground">
@@ -133,10 +140,17 @@ function ResultCard({
   );
 }
 
-export default async function DiagnosticsPage() {
+export default async function DiagnosticsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ fresh?: string }>;
+}) {
+  // 기본은 캐시(5분)를 쓰고, ?fresh=1 일 때만 실제로 다시 호출한다.
+  // 진단 화면을 새로고침할 때마다 9콜이 나가면 일일 한도가 금방 마른다.
+  const fresh = (await searchParams).fresh === "1";
   // 데이터셋당 1건만 조회한다 (일일 한도 절약).
   const results = await Promise.all(
-    DATASETS.map(async (dataset) => ({ dataset, result: await probeDataset(dataset) })),
+    DATASETS.map(async (dataset) => ({ dataset, result: await cachedProbe(dataset, fresh) })),
   );
 
   const okCount = results.filter((r) => r.result.status === "ok").length;
@@ -146,8 +160,22 @@ export default async function DiagnosticsPage() {
     <>
       <PageHeader
         title="API 연결 진단"
-        description="9개 데이터셋에 실제로 요청을 보내 응답 상태를 확인합니다."
+        description="결과를 5분간 캐시합니다. 새로고침해도 API 를 다시 부르지 않습니다."
+        actions={
+          <Link
+            href="/diagnostics?fresh=1"
+            className="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-white"
+          >
+            지금 다시 검사
+          </Link>
+        }
       />
+
+      {fresh && (
+        <p className="mb-4 rounded-lg border border-border bg-surface-muted px-4 py-2 text-sm text-muted">
+          캐시를 무시하고 {DATASETS.length}개 데이터셋을 실제로 호출했습니다.
+        </p>
+      )}
 
       <div className="mb-6 flex flex-wrap items-center gap-6 rounded-lg border border-border bg-surface px-4 py-3">
         <div>

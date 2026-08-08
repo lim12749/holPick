@@ -11,6 +11,7 @@
  */
 import "server-only";
 
+import { readCache, TTL, writeCache } from "./cache";
 import { getDataset, type KraDataset } from "./datasets";
 import type { KraResult, KraRow, KraStatus } from "./types";
 
@@ -460,6 +461,44 @@ async function callDatasetInner(dataset: KraDataset, opts: CallOptions = {}): Pr
 }
 
 /**
+ * 디스크 캐시를 경유해 호출한다.
+ *
+ * 같은 질의를 반복해도 TTL 안에서는 API 를 부르지 않는다. 캐시를 못 읽거나
+ * 못 쓰면 그냥 API 를 부르므로, 캐시 실패가 기능 실패로 번지지 않는다.
+ */
+export async function cachedCall(
+  datasetId: string,
+  opts: CallOptions,
+  cacheKey: string,
+  ttlMs: number,
+  options: { fresh?: boolean } = {},
+): Promise<KraResult> {
+  if (!options.fresh) {
+    const cached = await readCache(cacheKey);
+    if (cached.rows) {
+      return {
+        status: cached.rows.length === 0 ? "no_data" : "ok",
+        message: "캐시에서 읽음",
+        httpCode: null,
+        elapsedMs: 0,
+        totalCount: cached.rows.length,
+        pageNo: null,
+        numOfRows: null,
+        rows: cached.rows,
+        maskedUrl: "",
+        fromCache: true,
+        cacheAgeMs: cached.ageMs,
+      };
+    }
+  }
+
+  const result = await callKra(datasetId, opts);
+  // 정상 응답만 캐시한다. 오류를 캐시하면 TTL 동안 복구가 막힌다.
+  if (result.status === "ok") await writeCache(cacheKey, result.rows, ttlMs);
+  return { ...result, fromCache: false, cacheAgeMs: null };
+}
+
+/**
  * 진단용 — 데이터셋 하나를 1건만 조회해서 연결 상태를 본다.
  *
  * 9개 데이터셋을 한 화면에서 모두 확인하므로 방문 1회당 호출 9회가 나간다.
@@ -470,4 +509,21 @@ export async function probeDataset(
   revalidateSeconds?: number,
 ): Promise<KraResult> {
   return callDataset(dataset, { numOfRows: 1, revalidateSeconds });
+}
+
+/**
+ * 디스크 캐시를 경유한 진단 프로브.
+ *
+ * 홈과 진단 화면이 각각 9개 데이터셋을 확인하므로 방문마다 9콜이 나가던 것을
+ * TTL 안에서는 0콜로 줄인다. 응답이 없는 데이터셋(제공측 이슈)도 있어서
+ * 타임아웃을 짧게 두고, 그 결과는 캐시하지 않아 복구를 막지 않는다.
+ */
+export async function cachedProbe(dataset: KraDataset, fresh = false): Promise<KraResult> {
+  return cachedCall(
+    dataset.id,
+    { numOfRows: 1, timeoutMs: 8_000 },
+    `probe-${dataset.id}`,
+    TTL.probe,
+    { fresh },
+  );
 }

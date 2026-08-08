@@ -43,3 +43,6 @@ next-env.d.ts
 
 # OMC runtime state
 /.omc/
+
+# 로컬 응답 캐시 (API 호출 한도 절약용)
+/.cache/

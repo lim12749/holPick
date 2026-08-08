@@ -1,0 +1,63 @@
+import "server-only";
+
+import { monthTtl } from "./cache";
+import { cachedCall } from "./client";
+import { currentYearMonthKst, shiftMonth } from "./month";
+import { num } from "./horse";
+import type { KraRow } from "./types";
+
+/**
+ * 최근 N개월 경주기록 수집.
+ *
+ * `numOfRows=2000` 이면 한 달(최대 1,067행 관측)이 단일 호출로 들어온다.
+ * 페이지네이션이 필요 없고 실측 0.9초. 3개월이면 3콜이고, 캐시가 살아 있으면 0콜이다.
+ */
+
+const MONTH_ROWS = 2000;
+const MONTH_TIMEOUT_MS = 60_000;
+
+export interface HistoryLoad {
+  /** 시행이 끝난 행만. 미시행 행(ord=0)은 통계를 오염시키므로 제외한다. */
+  rows: KraRow[];
+  months: string[];
+  /** 월별 수집 결과. 화면에서 캐시 절약 효과를 보여준다. */
+  detail: { month: string; rows: number; fromCache: boolean }[];
+}
+
+/** 최근 n개월의 `YYYYMM` 목록. 이번 달 포함, 과거로 거슬러 간다. */
+export function recentMonths(n: number, from = currentYearMonthKst()): string[] {
+  return Array.from({ length: n }, (_, i) => shiftMonth(from, -i)).reverse();
+}
+
+export async function loadRecentResults(n = 3, fresh = false): Promise<HistoryLoad> {
+  const current = currentYearMonthKst();
+  const months = recentMonths(n, current);
+
+  const loaded = await Promise.all(
+    months.map(async (month) => {
+      const result = await cachedCall(
+        "race-result",
+        {
+          numOfRows: MONTH_ROWS,
+          extra: { rc_month: month },
+          timeoutMs: MONTH_TIMEOUT_MS,
+        },
+        `race-result-${month}-meet1`,
+        monthTtl(month, current),
+        { fresh },
+      );
+      return { month, result };
+    }),
+  );
+
+  const rows: KraRow[] = [];
+  const detail: HistoryLoad["detail"] = [];
+  for (const { month, result } of loaded) {
+    // 착순이 매겨진 행만 분석 대상이다. 경주기록 응답에는 시행 전 경주도 섞여 온다.
+    const finished = result.rows.filter((r) => num(r.ord) > 0);
+    rows.push(...finished);
+    detail.push({ month, rows: finished.length, fromCache: result.fromCache === true });
+  }
+
+  return { rows, months, detail };
+}
