@@ -23,10 +23,39 @@ export interface BacktestMetrics {
   runners: number;
   /** 예측 상위 2두 중 실제 1·2착이었던 두수의 평균. 무작위 기대값은 2×기저율. */
   top2HitAvg: number;
+  /**
+   * top2HitAvg 의 표준오차. 검증 경주가 100여 개뿐이라 방식 간 차이가
+   * 우연인지 실력인지 이 값 없이는 판단할 수 없다. 화면에 ± 로 함께 띄운다.
+   */
+  top2HitSe: number;
   /** 예측 1위가 실제 2착 이내였던 비율. */
   topPickHitRate: number;
   brier: number;
   logLoss: number;
+}
+
+/** 경주별 적중 수(0·1·2)에서 평균과 표준오차를 낸다. */
+function summarise(hits: number[]): { avg: number; se: number } {
+  const n = hits.length;
+  if (n === 0) return { avg: 0, se: 0 };
+  const avg = hits.reduce((a, b) => a + b, 0) / n;
+  if (n < 2) return { avg, se: 0 };
+  const variance = hits.reduce((acc, h) => acc + (h - avg) ** 2, 0) / (n - 1);
+  return { avg, se: Math.sqrt(variance / n) };
+}
+
+/**
+ * 두 방식의 차이가 통계적으로 의미 있는지.
+ *
+ * 같은 경주를 두 방식이 함께 맞히므로 대응 비교(paired)가 맞다. 독립 가정으로
+ * 계산하면 SE 가 과대평가되어 실제로는 유의한 차이를 놓친다.
+ */
+export function pairedDiff(a: number[], b: number[]): { diff: number; se: number; z: number } {
+  const n = Math.min(a.length, b.length);
+  if (n < 2) return { diff: 0, se: 0, z: 0 };
+  const d = Array.from({ length: n }, (_, i) => a[i] - b[i]);
+  const { avg, se } = summarise(d);
+  return { diff: avg, se, z: se > 0 ? avg / se : 0 };
 }
 
 export interface BacktestReport {
@@ -44,6 +73,13 @@ export interface BacktestReport {
   /** 확정배당 인기순. 사후 정보라 사실상 상한선이다. */
   favourite: BacktestMetrics;
   randomTop2HitAvg: number;
+  /**
+   * 모델과 각 기준선의 대응 비교. |z| ≥ 1.96 이면 우연으로 보기 어렵다.
+   * 검증 경주가 100여 개뿐이라 이 값 없이 "이겼다"고 말하면 과장이 된다.
+   */
+  vsStyle: { diff: number; se: number; z: number };
+  vsRating: { diff: number; se: number; z: number };
+  vsMarket: { diff: number; se: number; z: number };
   /** 추천 1순위 복승 조합이 실제 1·2착과 일치한 비율. */
   quinellaHitRate: number;
   /** 복승 조합을 판정할 수 있었던 경주 수. */
@@ -85,32 +121,55 @@ function isTop2(row: KraRow): boolean {
 }
 
 function emptyMetrics(): BacktestMetrics {
-  return { races: 0, runners: 0, top2HitAvg: 0, topPickHitRate: 0, brier: 0, logLoss: 0 };
+  return {
+    races: 0,
+    runners: 0,
+    top2HitAvg: 0,
+    top2HitSe: 0,
+    topPickHitRate: 0,
+    brier: 0,
+    logLoss: 0,
+  };
 }
 
-/** 순위만 주어졌을 때의 지표. 확률이 없는 기준선(레이팅순·각질순·인기순)에 쓴다. */
-function metricsFromOrder(races: KraRow[][], order: (race: KraRow[]) => KraRow[]): BacktestMetrics {
-  let hitSum = 0;
+/**
+ * 순위만 주어졌을 때의 지표. 확률이 없는 기준선(레이팅순·각질순·인기순)에 쓴다.
+ * 경주별 적중 수도 함께 돌려줘 방식 간 대응 비교를 할 수 있게 한다.
+ */
+function metricsFromOrder(
+  races: KraRow[][],
+  order: (race: KraRow[]) => KraRow[],
+): { metrics: BacktestMetrics; hits: number[] } {
+  const hits: number[] = [];
   let topHits = 0;
   let runners = 0;
-  let counted = 0;
 
   for (const race of races) {
     const ranked = order(race);
-    if (ranked.length === 0) continue;
-    counted += 1;
+    // 순위를 못 매긴 경주는 0두 적중으로 센다. 건너뛰면 분모가 달라져
+    // 방식 간 비교가 공정하지 않다 (레이팅 없는 경주가 유리하게 빠지는 문제).
+    if (ranked.length === 0) {
+      hits.push(0);
+      runners += race.length;
+      continue;
+    }
     runners += race.length;
-    hitSum += ranked.slice(0, 2).filter(isTop2).length;
+    hits.push(ranked.slice(0, 2).filter(isTop2).length);
     if (isTop2(ranked[0])) topHits += 1;
   }
 
+  const { avg, se } = summarise(hits);
   return {
-    races: counted,
-    runners,
-    top2HitAvg: counted ? hitSum / counted : 0,
-    topPickHitRate: counted ? topHits / counted : 0,
-    brier: 0,
-    logLoss: 0,
+    metrics: {
+      races: hits.length,
+      runners,
+      top2HitAvg: avg,
+      top2HitSe: se,
+      topPickHitRate: hits.length ? topHits / hits.length : 0,
+      brier: 0,
+      logLoss: 0,
+    },
+    hits,
   };
 }
 
@@ -160,7 +219,7 @@ export function runBacktest({ rows, dividends, weights }: BacktestInput): Backte
     .map(([key, r]) => [key, [...r].sort((a, b) => num(a.chulNo) - num(b.chulNo))] as const);
   const testRaces = testRaceEntries.map(([, r]) => r);
 
-  let hitSum = 0;
+  const modelHits: number[] = [];
   let topHits = 0;
   let brierSum = 0;
   let logLossSum = 0;
@@ -179,11 +238,13 @@ export function runBacktest({ rows, dividends, weights }: BacktestInput): Backte
     const preds = predictRace(candidates, stats, num(race[0].rcDist), weights);
     const byHr = new Map(race.map((r) => [str(r.hrNo), r]));
 
-    hitSum += preds
-      .slice(0, 2)
-      .map((p) => byHr.get(p.hrNo))
-      .filter((r): r is KraRow => !!r)
-      .filter(isTop2).length;
+    modelHits.push(
+      preds
+        .slice(0, 2)
+        .map((p) => byHr.get(p.hrNo))
+        .filter((r): r is KraRow => !!r)
+        .filter(isTop2).length,
+    );
 
     const top = byHr.get(preds[0]?.hrNo ?? "");
     if (top && isTop2(top)) topHits += 1;
@@ -227,24 +288,27 @@ export function runBacktest({ rows, dividends, weights }: BacktestInput): Backte
   }
 
   const n = testRaces.length;
+  const modelSummary = summarise(modelHits);
   const model: BacktestMetrics = n
     ? {
         races: n,
         runners,
-        top2HitAvg: hitSum / n,
+        top2HitAvg: modelSummary.avg,
+        top2HitSe: modelSummary.se,
         topPickHitRate: topHits / n,
         brier: runners ? brierSum / runners : 0,
         logLoss: runners ? logLossSum / runners : 0,
       }
     : emptyMetrics();
 
-  const ratingOnly = metricsFromOrder(testRaces, (race) =>
+  const ratingResult = metricsFromOrder(testRaces, (race) =>
     [...race].filter((r) => num(r.rating) > 0).sort((a, b) => num(b.rating) - num(a.rating)),
   );
+  const ratingOnly = ratingResult.metrics;
 
   // 각질 단독: 선행형 → 선입형 → 중위형 → 추입형 순으로 세운다.
   const styleRank = new Map<RunningStyle, number>(RUNNING_STYLES.map((s, i) => [s, i]));
-  const styleOnly = metricsFromOrder(testRaces, (race) => {
+  const styleResult = metricsFromOrder(testRaces, (race) => {
     const key = `${str(race[0].rcDate)}-${num(race[0].rcNo)}`;
     const snapshot = styleHistory.byRace.get(key);
     if (!snapshot) return [];
@@ -256,9 +320,12 @@ export function runBacktest({ rows, dividends, weights }: BacktestInput): Backte
     );
   });
 
-  const favourite = metricsFromOrder(testRaces, (race) =>
+  const styleOnly = styleResult.metrics;
+
+  const favouriteResult = metricsFromOrder(testRaces, (race) =>
     [...race].filter((r) => num(r.winOdds) > 0).sort((a, b) => num(a.winOdds) - num(b.winOdds)),
   );
+  const favourite = favouriteResult.metrics;
 
   return {
     base: stats.base,
@@ -273,6 +340,9 @@ export function runBacktest({ rows, dividends, weights }: BacktestInput): Backte
     styleOnly,
     favourite,
     randomTop2HitAvg: 2 * stats.base,
+    vsStyle: pairedDiff(modelHits, styleResult.hits),
+    vsRating: pairedDiff(modelHits, ratingResult.hits),
+    vsMarket: pairedDiff(modelHits, favouriteResult.hits),
     quinellaHitRate: quinellaRaces ? quinellaHits / quinellaRaces : 0,
     quinellaRaces,
     quinellaRoi: hadDividend && bets > 0 ? returned / bets : null,

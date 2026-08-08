@@ -30,7 +30,12 @@ function Row({
         <span className="font-medium">{label}</span>
         <span className="ml-2 text-xs text-muted">{note}</span>
       </td>
-      <td className="px-3 py-2 text-right font-semibold">{m.top2HitAvg.toFixed(2)}</td>
+      <td className="px-3 py-2 text-right">
+        <span className="font-semibold">{m.top2HitAvg.toFixed(2)}</span>
+        {m.top2HitSe > 0 && (
+          <span className="ml-1 text-xs text-muted">± {m.top2HitSe.toFixed(2)}</span>
+        )}
+      </td>
       <td className="px-3 py-2 text-right">{pct(m.topPickHitRate)}</td>
     </tr>
   );
@@ -63,10 +68,17 @@ export default async function BacktestPage() {
     );
   }
 
-  const beatsRandom = report.model.top2HitAvg > report.randomTop2HitAvg;
-  const beatsRating = report.model.top2HitAvg > report.ratingOnly.top2HitAvg;
-  const beatsStyle = report.model.top2HitAvg > report.styleOnly.top2HitAvg;
-  const beatsMarket = report.model.top2HitAvg > report.favourite.top2HitAvg;
+  /**
+   * 차이가 우연인지 판단한다. |z| ≥ 1.96 이 아니면 "이겼다"고 말할 수 없다.
+   * 검증 경주가 100여 개뿐이라 이 구분이 결정적이다.
+   */
+  const verdict = (d: { diff: number; z: number }) => {
+    if (Math.abs(d.z) < 1.96) return { label: "차이 불확실", cls: "text-warn" };
+    return d.diff > 0 ? { label: "이김", cls: "text-ok" } : { label: "못 이김", cls: "text-danger" };
+  };
+  const vStyle = verdict(report.vsStyle);
+  const vRating = verdict(report.vsRating);
+  const vMarket = verdict(report.vsMarket);
 
   return (
     <>
@@ -165,34 +177,29 @@ export default async function BacktestPage() {
         <h2 className="font-medium">해석</h2>
         <ul className="mt-2 space-y-1.5 text-muted">
           <li>
-            무작위 대비:{" "}
-            <strong className={beatsRandom ? "text-ok" : "text-danger"}>
-              {beatsRandom ? "이김" : "못 이김"}
-            </strong>{" "}
-            ({report.model.top2HitAvg.toFixed(2)} vs {report.randomTop2HitAvg.toFixed(2)})
+            <strong className="font-medium text-foreground">각질 단독</strong> 대비:{" "}
+            <strong className={vStyle.cls}>{vStyle.label}</strong> (차이{" "}
+            {report.vsStyle.diff.toFixed(2)} ± {report.vsStyle.se.toFixed(2)}, z=
+            {report.vsStyle.z.toFixed(2)}) — 각질 하나로 충분하다면 나머지 7개 요인은
+            군더더기입니다.
           </li>
           <li>
-            각질 단독 대비:{" "}
-            <strong className={beatsStyle ? "text-ok" : "text-danger"}>
-              {beatsStyle ? "이김" : "못 이김"}
-            </strong>{" "}
-            ({report.model.top2HitAvg.toFixed(2)} vs {report.styleOnly.top2HitAvg.toFixed(2)}) —
-            각질 하나로 충분하다면 나머지 7개 요인은 군더더기입니다.
+            <strong className="font-medium text-foreground">레이팅 단독</strong> 대비:{" "}
+            <strong className={vRating.cls}>{vRating.label}</strong> (차이{" "}
+            {report.vsRating.diff.toFixed(2)} ± {report.vsRating.se.toFixed(2)}, z=
+            {report.vsRating.z.toFixed(2)})
           </li>
           <li>
-            레이팅 단독 대비:{" "}
-            <strong className={beatsRating ? "text-ok" : "text-danger"}>
-              {beatsRating ? "이김" : "못 이김"}
-            </strong>{" "}
-            ({report.model.top2HitAvg.toFixed(2)} vs {report.ratingOnly.top2HitAvg.toFixed(2)})
+            <strong className="font-medium text-foreground">시장(확정배당)</strong> 대비:{" "}
+            <strong className={vMarket.cls}>{vMarket.label}</strong> (차이{" "}
+            {report.vsMarket.diff.toFixed(2)} ± {report.vsMarket.se.toFixed(2)}, z=
+            {report.vsMarket.z.toFixed(2)}) — 배당은 경주가 끝나야 확정되므로 예측에 쓸 수 없습니다.
+            상한선으로만 보세요.
           </li>
-          <li>
-            시장(확정배당) 대비:{" "}
-            <strong className={beatsMarket ? "text-ok" : "text-warn"}>
-              {beatsMarket ? "이김" : "못 이김"}
-            </strong>{" "}
-            ({report.model.top2HitAvg.toFixed(2)} vs {report.favourite.top2HitAvg.toFixed(2)}) —
-            배당은 경주가 끝나야 확정되므로 예측에 쓸 수 없습니다. 상한선으로만 보세요.
+          <li className="text-foreground">
+            <strong className="font-medium">z 값이 ±1.96 안이면 차이가 우연일 수 있습니다.</strong>{" "}
+            검증 경주가 {report.model.races}개뿐이라, 숫자가 높다고 곧바로 더 낫다고 말할 수
+            없습니다.
           </li>
           {report.quinellaRoi != null && report.quinellaRoi < 1 && (
             <li className="text-danger">
