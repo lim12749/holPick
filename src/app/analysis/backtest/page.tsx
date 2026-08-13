@@ -1,9 +1,10 @@
 import Link from "next/link";
 import { PageHeader } from "@/components/PageHeader";
-import { runBacktest, type BacktestMetrics } from "@/lib/kra/backtest";
-import { loadQuinellaDividends, type QuinellaDividend } from "@/lib/kra/dividend";
+import { runBacktest, testSplitIndex, type BacktestMetrics } from "@/lib/kra/backtest";
+import { loadDividends, poolPayback, type QuinellaDividend } from "@/lib/kra/dividend";
 import { str } from "@/lib/kra/horse";
 import { loadRecentResults } from "@/lib/kra/history";
+import { groupRows } from "@/lib/kra/stats";
 
 export const dynamic = "force-dynamic";
 
@@ -46,13 +47,39 @@ export default async function BacktestPage() {
 
   // 검증 구간 경주일의 복승 확정배당만 받는다. 경주일당 1콜이고 캐시된다.
   const dates = [...new Set(history.rows.map((r) => str(r.rcDate)))].filter(Boolean).sort();
-  const testDates = dates.slice(Math.max(1, Math.floor(dates.length * 0.7)));
+  // 경계를 백테스트와 공유한다. 따로 적으면 배당 구간과 검증 구간이 어긋난다.
+  const testDates = dates.slice(testSplitIndex(dates.length));
   const dividendEntries = await Promise.all(
-    testDates.map(async (d) => [d, await loadQuinellaDividends(d)] as const),
+    testDates.map(async (d) => [d, await loadDividends(d)] as const),
   );
-  const dividends = new Map<string, Map<string, QuinellaDividend>>(dividendEntries);
+  const dividends = new Map<string, Map<string, QuinellaDividend>>(
+    dividendEntries.map(([d, v]) => [d, v.quinella]),
+  );
 
   const report = runBacktest({ rows: history.rows, dividends });
+
+  /*
+   * 승식별 환급률. 전 조합을 다 샀을 때 얼마가 돌아오는지를 실측한 값이고,
+   * 어떤 전략이든 여기서 출발한다. 복연승으로 갈아탈 이유가 있는지 판단하는
+   * 근거이기도 하다 — 적중률이 높아도 세금이 더 비싸면 소용없다.
+   */
+  const fieldSize = new Map<string, number>();
+  for (const [key, race] of groupRows(history.rows)) fieldSize.set(key, race.length);
+  const paybackInput = (pick: (v: (typeof dividendEntries)[number][1]) => Map<string, QuinellaDividend>) =>
+    dividendEntries.flatMap(([date, v]) => {
+      const byRace = new Map<number, number[]>();
+      for (const d of pick(v).values()) {
+        const list = byRace.get(d.rcNo);
+        if (list) list.push(d.odds);
+        else byRace.set(d.rcNo, [d.odds]);
+      }
+      return [...byRace.entries()].flatMap(([rcNo, payouts]) => {
+        const n = fieldSize.get(`${date}-${rcNo}`) ?? 0;
+        return n >= 2 ? [{ combos: (n * (n - 1)) / 2, payouts }] : [];
+      });
+    });
+  const quinellaPayback = poolPayback(paybackInput((v) => v.quinella));
+  const placePayback = poolPayback(paybackInput((v) => v.placeQuinella));
 
   if (!report) {
     return (
@@ -79,6 +106,8 @@ export default async function BacktestPage() {
   const vStyle = verdict(report.vsStyle);
   const vRating = verdict(report.vsRating);
   const vMarket = verdict(report.vsMarket);
+  const vNoMarket = verdict(report.vsNoMarket);
+  const beatMarket = report.vsMarket.z >= 1.96;
 
   return (
     <>
@@ -91,6 +120,34 @@ export default async function BacktestPage() {
           </Link>
         }
       />
+
+      {/*
+        이 화면의 1차 질문은 "돈을 벌었나"가 아니라 "시장을 이겼나"다.
+        시장보다 못한 예측으로는 공제율(약 26%)을 넘을 방법이 원리적으로 없다.
+      */}
+      <section
+        className={`mb-6 rounded-lg border p-4 ${
+          beatMarket ? "border-ok bg-ok-bg" : "border-warn bg-warn-bg"
+        }`}
+      >
+        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+          <h2 className="font-medium">1차 목표 — 시장(확정배당 인기순)을 이겼는가</h2>
+          <span className={`text-sm font-semibold ${beatMarket ? "text-ok" : "text-warn"}`}>
+            {beatMarket ? "이김" : "아직 못 이김"}
+          </span>
+        </div>
+        <p className="mt-1.5 text-sm">
+          상위 2두 적중이 시장 {report.favourite.top2HitAvg.toFixed(2)} 대비{" "}
+          <strong className="font-medium">
+            {report.vsMarket.diff >= 0 ? "+" : ""}
+            {report.vsMarket.diff.toFixed(3)} ± {report.vsMarket.se.toFixed(3)}
+          </strong>{" "}
+          (z={report.vsMarket.z.toFixed(2)}).{" "}
+          {beatMarket
+            ? "우연으로 보기 어려운 차이입니다."
+            : "차이가 표준오차 안이라 아직 이겼다고 말할 수 없습니다. 방향은 맞지만 표본이 더 필요합니다."}
+        </p>
+      </section>
 
       <section className="mb-6 grid gap-3 sm:grid-cols-4">
         {[
@@ -135,8 +192,9 @@ export default async function BacktestPage() {
             </tr>
             <Row label="각질 단독" note="선행형 → 추입형 순" m={report.styleOnly} />
             <Row label="레이팅 단독" note="레이팅 높은 순" m={report.ratingOnly} />
-            <Row label="이 모델" note="각질 포함 8개 요인" m={report.model} highlight />
-            <Row label="확정배당 인기순" note="사후 정보 · 사실상 상한선" m={report.favourite} />
+            <Row label="모델 (배당 제외)" note="배당 없이 같은 절차로 적합" m={report.modelNoMarket} />
+            <Row label="시장 (확정배당 인기순)" note="넘어야 할 1차 목표선" m={report.favourite} />
+            <Row label="모델 + 시장" note="배당을 요인으로 포함" m={report.model} highlight />
           </tbody>
         </table>
       </div>
@@ -172,6 +230,48 @@ export default async function BacktestPage() {
         </div>
       </section>
 
+      {/*
+        모든 전략의 출발점. 예측이 아무리 좋아도 이 공제율을 넘지 못하면 장기적으로 진다.
+        복연승으로 갈아탈 이유가 있는지도 여기서 판단한다.
+      */}
+      {(quinellaPayback != null || placePayback != null) && (
+        <section className="mb-6 rounded-lg border border-border bg-surface p-4">
+          <h2 className="font-medium">승식별 환급률 — 넘어야 할 세금</h2>
+          <p className="mt-1 text-xs text-muted">
+            그 경주의 <strong className="font-medium">전 조합을 다 샀을 때</strong> 돌아오는 비율을
+            실측한 값입니다. 무작위로 사면 이 값이 곧 기대 회수율이고, 본전에 닿으려면 예측으로 그
+            차이를 메워야 합니다.
+          </p>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            {[
+              ["복승 (1·2착)", quinellaPayback, "지금 베팅 대상"],
+              ["복연승 (2두 모두 3착 이내)", placePayback, "적중은 잦지만 세금이 더 비싸다"],
+            ].map(([label, v, note]) => (
+              <div key={label as string} className="rounded-lg border border-border px-4 py-3">
+                <p className="text-xs text-muted">{label as string}</p>
+                <p className="mt-1 font-semibold">
+                  {v == null ? "—" : `환급률 ${pct(v as number)}`}
+                  {v != null && (
+                    <span className="ml-2 text-sm font-normal text-danger">
+                      공제 {pct(1 - (v as number))}
+                    </span>
+                  )}
+                </p>
+                <p className="mt-1 text-xs text-muted">{note as string}</p>
+              </div>
+            ))}
+          </div>
+          {quinellaPayback != null && placePayback != null && placePayback < quinellaPayback && (
+            <p className="mt-3 text-xs text-muted">
+              복연승은 공제가 {pct(quinellaPayback - placePayback)} 더 비쌉니다. 적중률이 높다고
+              갈아탈 이유가 되지 않습니다 — 다만 배당 분포가 좁아 분산이 작으므로,{" "}
+              <strong className="font-medium text-foreground">우위를 더 빨리 재는 계측용</strong>
+              으로는 쓸 만합니다.
+            </p>
+          )}
+        </section>
+      )}
+
       {/* 성적이 나쁘면 나쁘다고 그대로 쓴다. 검증의 목적은 자랑이 아니다. */}
       <section className="rounded-lg border border-border bg-surface p-4 text-sm">
         <h2 className="font-medium">해석</h2>
@@ -190,11 +290,19 @@ export default async function BacktestPage() {
             {report.vsRating.z.toFixed(2)})
           </li>
           <li>
-            <strong className="font-medium text-foreground">시장(확정배당)</strong> 대비:{" "}
+            <strong className="font-medium text-foreground">시장(확정배당 인기순)</strong> 대비:{" "}
             <strong className={vMarket.cls}>{vMarket.label}</strong> (차이{" "}
-            {report.vsMarket.diff.toFixed(2)} ± {report.vsMarket.se.toFixed(2)}, z=
-            {report.vsMarket.z.toFixed(2)}) — 배당은 경주가 끝나야 확정되므로 예측에 쓸 수 없습니다.
-            상한선으로만 보세요.
+            {report.vsMarket.diff.toFixed(3)} ± {report.vsMarket.se.toFixed(3)}, z=
+            {report.vsMarket.z.toFixed(2)}) — 확정배당은 발매 마감 시점의 시장 컨센서스라 경주 전에
+            알 수 있습니다. 넘을 수 없는 상한선이 아니라 <strong className="font-medium">넘어야 할 목표선</strong>입니다.
+          </li>
+          <li>
+            <strong className="font-medium text-foreground">배당을 넣은 효과</strong>:{" "}
+            <strong className={vNoMarket.cls}>{vNoMarket.label}</strong> (차이{" "}
+            {report.vsNoMarket.diff.toFixed(3)} ± {report.vsNoMarket.se.toFixed(3)}, z=
+            {report.vsNoMarket.z.toFixed(2)}) — 같은 절차로 배당만 빼고 적합한 모델과의 비교입니다.
+            {report.vsNoMarket.z >= 1.96 &&
+              " 배당 하나가 나머지 요인을 다 합친 것보다 크게 기여합니다."}
           </li>
           <li className="text-foreground">
             <strong className="font-medium">z 값이 ±1.96 안이면 차이가 우연일 수 있습니다.</strong>{" "}
@@ -211,8 +319,12 @@ export default async function BacktestPage() {
       </section>
 
       <p className="mt-4 text-xs text-muted">
-        시간 순으로 분할했고(무작위 분할 금지), 예측 입력에는 착순·배당·주파기록처럼 경주가 끝나야
-        알 수 있는 값을 넣지 않았습니다. 각질도 해당 경주 이전 이력으로만 판정했습니다.
+        시간 순으로 분할했고(무작위 분할 금지), 예측 입력에는 착순·주파기록·착차처럼{" "}
+        <strong className="font-medium text-foreground">결과를 알아야만 나오는 값</strong>을 넣지
+        않았습니다. 각질도 해당 경주 이전 이력으로만 판정했습니다. 단승 배당은 넣었습니다 —
+        파리뮤추얼 확정배당은 발매 마감 시점의 시장 컨센서스이고 마권을 사는 사람은 그걸 보고
+        사므로, 결과 정보가 아닙니다. 실제로 경주기록 응답은 미시행 경주에도 배당을 실어 보냅니다.
+        가중치와 온도는 학습 구간에서만 적합했습니다(<code className="font-mono">scripts/fit-weights.mjs</code>).
       </p>
     </>
   );

@@ -22,6 +22,8 @@ const NAV = [
   { href: "/", label: "홈" },
   // 출전표가 예측의 주 진입점이라 가장 앞에 둔다.
   { href: "/races", label: "출전표" },
+  // 출전표(앞으로 살 것) 바로 뒤에 지난 픽(샀다면 어땠나)을 둔다.
+  { href: "/picks", label: "지난 픽" },
   { href: "/analysis", label: "분석" },
   { href: "/horses", label: "경주마" },
   { href: "/diagnostics", label: "API 진단" },

@@ -2,25 +2,26 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { PageHeader } from "@/components/PageHeader";
 import { callKra } from "@/lib/kra/client";
-import {
-  budamDelta,
-  formatRaceDate,
-  formatStartTime,
-  groupByRace,
-  type Entry,
-} from "@/lib/kra/entry";
+import { budamDelta, formatRaceDate, formatStartTime, groupByRace } from "@/lib/kra/entry";
 import { formatPrize, formatRate, str } from "@/lib/kra/horse";
 import { loadRecentResults } from "@/lib/kra/history";
-import { predictRace, type Candidate } from "@/lib/kra/predict";
-import { quinellaPicks } from "@/lib/kra/quinella";
+import {
+  buildRacePick,
+  mergeRunners,
+  predictionRunners,
+  toCandidates,
+  type HorseTraits,
+  type RaceRunner,
+} from "@/lib/kra/pick";
+import {
+  buildSectionalHistory,
+  speedArrow,
+  MIN_RUNS,
+  SECTIONAL_DESCRIPTION,
+} from "@/lib/kra/sectional";
 import { buildStyleHistory, STYLE_DESCRIPTION } from "@/lib/kra/style";
 import { buildStatsBundle } from "@/lib/kra/stats";
-import {
-  formatRaceTime,
-  groupResultsByRace,
-  ordClassName,
-  type RaceResult,
-} from "@/lib/kra/result";
+import { formatRaceTime, groupResultsByRace, ordClassName } from "@/lib/kra/result";
 
 export const dynamic = "force-dynamic";
 
@@ -34,15 +35,6 @@ function Condition({ label, value }: { label: string; value: string }) {
       <dd className="mt-0.5 text-sm font-medium">{value}</dd>
     </div>
   );
-}
-
-/** 출전마와 경주 결과를 마번으로 짝지은 한 줄. 어느 한쪽만 있을 수도 있다. */
-interface Runner {
-  hrNo: string;
-  hrName: string;
-  chulNo: number;
-  entry: Entry | null;
-  result: RaceResult | null;
 }
 
 export default async function RaceEntryPage({
@@ -66,9 +58,16 @@ export default async function RaceEntryPage({
    * 화면의 확률이 실제보다 좋아 보이게 된다.
    */
   const priorRows = history.rows.filter((r) => str(r.rcDate) < date);
-  // 각질 이력도 이전 기록만으로 만든다.
+  // 각질·구간 이력도 이전 기록만으로 만든다.
   const styleHistory = buildStyleHistory(priorRows);
-  const stats = priorRows.length > 0 ? buildStatsBundle(priorRows, styleHistory) : null;
+  const sectionalHistory = buildSectionalHistory(priorRows);
+  const stats =
+    priorRows.length > 0 ? buildStatsBundle(priorRows, styleHistory, sectionalHistory) : null;
+  // 이 경주일 이전 기록만으로 만든 이력이라 최종값을 그대로 써도 누수가 아니다.
+  const traits: HorseTraits = {
+    style: styleHistory.finalStyle,
+    sectional: sectionalHistory.final,
+  };
 
   const race = groupByRace(entryResult.rows).find((r) => r.card.rcNo === raceNo) ?? null;
   const resultGroup = groupResultsByRace(resultResult.rows).find((g) => g.info.rcNo === raceNo) ?? null;
@@ -77,57 +76,33 @@ export default async function RaceEntryPage({
   const finished = resultGroup?.finished ?? false;
 
   // 마번으로 병합한다. 지난 경주일은 출전표가 비므로 결과만으로도 표가 채워져야 한다.
-  const entryByHr = new Map((race?.entries ?? []).map((e) => [e.hrNo, e]));
-  const resultByHr = new Map((resultGroup?.results ?? []).map((r) => [r.hrNo, r]));
-  const allHrNos = [...new Set([...entryByHr.keys(), ...resultByHr.keys()])];
-
-  const runners: Runner[] = allHrNos
-    .map((hrNo) => {
-      const entry = entryByHr.get(hrNo) ?? null;
-      const result = resultByHr.get(hrNo) ?? null;
-      return {
-        hrNo,
-        hrName: entry?.hrName || result?.hrName || "",
-        chulNo: entry?.chulNo || result?.chulNo || 0,
-        entry,
-        result,
-      };
-    })
-    .sort((a, b) =>
-      finished
-        ? // 실격·미출전으로 착순이 없는 말은 뒤로.
-          (a.result?.ord || Number.MAX_SAFE_INTEGER) - (b.result?.ord || Number.MAX_SAFE_INTEGER)
-        : a.chulNo - b.chulNo,
-    );
+  const runners: RaceRunner[] = mergeRunners(
+    race?.entries ?? [],
+    resultGroup?.results ?? [],
+  ).sort((a, b) =>
+    finished
+      ? // 실격·미출전으로 착순이 없는 말은 뒤로.
+        (a.result?.ord || Number.MAX_SAFE_INTEGER) - (b.result?.ord || Number.MAX_SAFE_INTEGER)
+      : a.chulNo - b.chulNo,
+  );
 
   const entries = race?.entries ?? [];
   const card = race?.card ?? null;
   const info = resultGroup?.info ?? null;
 
-  // 예측 입력은 경주 전에 확보 가능한 값만 쓴다. 착순·배당·주파기록은 넣지 않는다.
-  const candidates: Candidate[] = runners.map((r) => ({
-    hrNo: r.hrNo,
-    hrName: r.hrName,
-    chulNo: r.chulNo,
-    rating: r.entry?.rating ?? r.result?.rating ?? 0,
-    wgBudam: r.entry?.wgBudam ?? r.result?.wgBudam ?? 0,
-    jkName: r.entry?.jkName ?? r.result?.jkName ?? "",
-    trName: r.entry?.trName ?? r.result?.trName ?? "",
-    restDays: r.entry?.restDays ?? 0,
-    lastYearStarts: r.entry?.lastYear.starts ?? 0,
-    // 복승이 타깃이므로 최근 1년도 1·2착만 센다.
-    lastYearTop2: (r.entry?.lastYear.first ?? 0) + (r.entry?.lastYear.second ?? 0),
-    style: styleHistory.finalStyle.get(r.hrNo) ?? null,
-  }));
+  /*
+   * 예측 입력은 경주 전에 확보 가능한 값만 쓴다. 착순·배당·주파기록은 넣지 않는다.
+   * 각질은 이 경주일 이전 기록으로 만든 이력의 최종 성향이라 누수가 없다.
+   * 시행이 끝났으면 출전취소마를 빼고 실제로 달린 말만 넣는다.
+   */
+  const candidates = toCandidates(predictionRunners(runners), traits);
 
-  const predictions =
-    stats && candidates.length > 0
-      ? predictRace(candidates, stats, card?.rcDist || info?.rcDist || 0)
-      : [];
+  // 복승은 두 마리를 고르는 베팅이라 말별 확률만으로는 마권을 살 수 없다.
+  const { predictions, picks } = stats
+    ? buildRacePick(candidates, stats, card?.rcDist || info?.rcDist || 0, 5)
+    : { predictions: [], picks: [] };
   const predByHr = new Map(predictions.map((p) => [p.hrNo, p]));
   const hasPrediction = predictions.length > 0;
-  // 복승은 두 마리를 고르는 베팅이라 말별 확률만으로는 마권을 살 수 없다.
-  const picks = hasPrediction ? quinellaPicks(predictions, 5) : [];
 
   const title = `${formatRaceDate(date)} ${raceNo}경주`;
   const description = [
@@ -151,6 +126,8 @@ export default async function RaceEntryPage({
     ...(hasPrediction
       ? ([
           ["각질", "left"],
+          ["초반", "left"],
+          ["막판", "left"],
           ["복승 예측", "right"],
         ] as [string, "left" | "right"][])
       : []),
@@ -289,6 +266,29 @@ export default async function RaceEntryPage({
                       )}
                     </td>
                   )}
+                  {hasPrediction &&
+                    (["early", "late"] as const).map((metric) => {
+                      const z = traits.sectional[metric].get(r.hrNo);
+                      return (
+                        <td key={metric} className="whitespace-nowrap px-3 py-2">
+                          {z == null ? (
+                            <span
+                              className="text-muted"
+                              title={`과거 ${MIN_RUNS}전이 안 돼 판정 불가`}
+                            >
+                              —
+                            </span>
+                          ) : (
+                            <span
+                              className={z >= 0.25 ? "text-accent" : z <= -0.25 ? "text-muted" : ""}
+                              title={`${SECTIONAL_DESCRIPTION[metric]} · ${z >= 0 ? "+" : ""}${z.toFixed(2)}σ`}
+                            >
+                              {speedArrow(z)}
+                            </span>
+                          )}
+                        </td>
+                      );
+                    })}
                   {hasPrediction && (
                     <td className="whitespace-nowrap px-3 py-2 text-right">
                       {(() => {
@@ -395,10 +395,14 @@ export default async function RaceEntryPage({
       {hasPrediction && (
         <p className="mt-2 rounded-lg border border-border bg-surface-muted px-4 py-3 text-xs text-muted">
           <strong className="font-medium text-foreground">복승 예측</strong>은 이 경주일{" "}
-          <strong className="font-medium text-foreground">이전</strong> 기록만으로 만든 통계에
-          레이팅·최근폼·각질·기수·조교사·부담중량·게이트·휴양 8개 요인을 가중 합산한 2착 이내 확률입니다. 배당률은
-          경주가 끝나야 확정되므로 입력에 넣지 않았습니다. <code className="font-mono">*</code> 는
-          레이팅 미산정이라 경주 내 중앙값으로 대체했다는 표시입니다.{" "}
+          <strong className="font-medium text-foreground">이전</strong> 기록으로 만든 통계와{" "}
+          <strong className="font-medium text-foreground">단승 배당</strong>을 가중 합산한 2착 이내
+          확률입니다. 확정배당은 발매 마감 시점의 시장 컨센서스라 경주 전에 알 수 있으므로 입력에
+          넣습니다 — 실제로 가장 강한 요인이고, 이걸 넣으면 레이팅·각질·기수·부담중량은 기여가 0 이
+          됩니다(시장이 이미 반영하고 있다는 뜻입니다). 배당판이 아직 얇은 발매 초반에는 배당을 빼고
+          최근폼 중심으로 예측하며, 그때는 픽이 바뀔 수 있습니다.{" "}
+          <code className="font-mono">*</code> 는 레이팅 미산정이라 경주 내 중앙값으로 대체했다는
+          표시입니다.{" "}
           <Link href="/analysis/backtest" className="text-accent hover:underline">
             검증 결과
           </Link>
