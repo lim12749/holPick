@@ -92,14 +92,25 @@ function loadRows() {
   return rows;
 }
 
+/**
+ * 하루치 배당을 승식 4종으로 나눠 읽는다.
+ *
+ * 단식·연식은 말 1마리라 `toDividendsOf`(2마리 전제)로는 읽히지 않는다 —
+ * 조용히 빈 맵이 나온다. 전용 파서를 쓴다.
+ */
 function loadDividendsByDate(lib, dates) {
-  const { toDividendsOf } = lib["dividend-parse"];
+  const { toDividendsOf, toSingleDividendsOf } = lib["dividend-parse"];
   const out = new Map();
   for (const d of dates) {
     const p = join(CACHE, `dividend-${d}-meet1.json`);
     if (!existsSync(p)) continue;
-    const env = JSON.parse(readFileSync(p, "utf8"));
-    out.set(d, toDividendsOf(env.rows ?? [], "복식"));
+    const rows = JSON.parse(readFileSync(p, "utf8")).rows ?? [];
+    out.set(d, {
+      win: toSingleDividendsOf(rows, "단식"),
+      place: toSingleDividendsOf(rows, "연식"),
+      quinella: toDividendsOf(rows, "복식"),
+      quinellaPlace: toDividendsOf(rows, "복연"),
+    });
   }
   return out;
 }
@@ -257,14 +268,24 @@ async function buildRecords(lib) {
         });
 
         const rcNo = num(runners[0].rcNo);
-        const payouts = {};
+        // 승식 4종을 각각 담는다. 적중 판정은 언제나 **이 맵의 키 존재 여부**로 하고
+        // 착순과 비교하지 않는다 — 동착이면 당첨이 여럿인데 착순 비교는 하나만 잡는다.
+        const payouts = { win: {}, place: {}, quinella: {}, quinellaPlace: {} };
         if (day) {
-          for (const d of day.values()) {
-            if (d.rcNo === rcNo) payouts[pairKey(d.pair[0], d.pair[1])] = d.odds;
-          }
+          for (const d of day.win.values()) if (d.rcNo === rcNo) payouts.win[d.horse] = d.odds;
+          for (const d of day.place.values()) if (d.rcNo === rcNo) payouts.place[d.horse] = d.odds;
+          for (const d of day.quinella.values())
+            if (d.rcNo === rcNo) payouts.quinella[pairKey(d.pair[0], d.pair[1])] = d.odds;
+          for (const d of day.quinellaPlace.values())
+            if (d.rcNo === rcNo) payouts.quinellaPlace[pairKey(d.pair[0], d.pair[1])] = d.odds;
         }
 
         const actual = actualPair(runners.map((r) => ({ ord: num(r.ord), chulNo: num(r.chulNo) })));
+        // 3착까지의 마번. 연승·복연 정산의 기준이며, 동착이면 3개를 넘을 수 있다.
+        const top3 = runners
+          .filter((r) => num(r.ord) >= 1 && num(r.ord) <= 3)
+          .sort((a, b) => num(a.ord) - num(b.ord))
+          .map((r) => num(r.chulNo));
 
         races.push({
           date,
@@ -280,9 +301,12 @@ async function buildRecords(lib) {
           overround: market.overround,
           favRank,
           actual,
-          // 정산 가능 = 배당맵이 비어 있지 않다. actual 과 비교하지 않는 이유는
+          top3,
+          // 정산 가능 = 복승 배당맵이 비어 있지 않다. actual 과 비교하지 않는 이유는
           // 2착 동착이면 당첨 조합이 둘인데 actualPair 는 하나만 돌려주기 때문이다.
-          settled: Object.keys(payouts).length > 0,
+          // 기존 탐색이 복승 기준이므로 이 필드의 뜻은 그대로 두고, 승식별 정산 가능
+          // 여부는 bet-types.mjs 가 각 payouts 맵을 직접 보고 판단한다.
+          settled: Object.keys(payouts.quinella).length > 0,
           payouts,
         });
       }
@@ -308,7 +332,7 @@ function paybackUnits(races) {
     .filter((r) => r.settled)
     .map((r) => ({
       combos: (r.n * (r.n - 1)) / 2,
-      payouts: Object.values(r.payouts),
+      payouts: Object.values(r.payouts.quinella),
     }));
 }
 
@@ -549,7 +573,7 @@ function buildColumns(races, fit, payback) {
         const idx = pairIndex(i, j, r.n);
         pm.push(mp[idx]);
         pk.push(kp[idx]);
-        payout.push(r.payouts[pairKey(r.chulNo[i], r.chulNo[j])] ?? 0);
+        payout.push(r.payouts.quinella[pairKey(r.chulNo[i], r.chulNo[j])] ?? 0);
         favMax.push(Math.max(r.favRank[i], r.favRank[j]));
         favMin.push(Math.min(r.favRank[i], r.favRank[j]));
       }
