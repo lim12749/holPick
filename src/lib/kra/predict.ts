@@ -174,23 +174,23 @@ export const MARKET_MODEL: Model = {
  * 여물면 반드시 `MARKET_MODEL` 로 넘어간다.
  */
 export const NO_MARKET_MODEL: Model = {
-  temperature: 6.15,
+  temperature: 6.41,
   weights: {
     market: 0,
-    relativeAge: 0.14,
-    lateSpeed: 0.115,
-    recentForm: 0.114,
-    accel: 0.1,
-    budam: 0.081,
-    sex: 0.074,
-    origin: 0.07,
-    jockey: 0.061,
-    style: 0.06,
-    ratingRank: 0.046,
-    trainer: 0.044,
-    gate: 0.042,
-    earlySpeed: 0.031,
-    rest: 0.023,
+    lateSpeed: 0.137,
+    origin: 0.127,
+    relativeAge: 0.111,
+    accel: 0.103,
+    style: 0.094,
+    sex: 0.092,
+    jockey: 0.069,
+    budam: 0.054,
+    trainer: 0.053,
+    ratingRank: 0.05,
+    earlySpeed: 0.045,
+    recentForm: 0.028,
+    rest: 0.022,
+    gate: 0.017,
   },
 };
 
