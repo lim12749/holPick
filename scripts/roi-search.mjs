@@ -237,6 +237,13 @@ async function buildRecords(lib) {
         const winByChul = new Map(preds.map((p) => [p.chulNo, p.win]));
         const modelWin = chulNo.map((c) => winByChul.get(c) ?? 0);
 
+        // 순수 기본 요인 확률(시장 항 0). 시장과 **확률 수준에서** 섞어 보려면
+        // 시장이 안 섞인 쪽이 따로 있어야 한다. MARKET_MODEL 은 시장을 요인 하나로
+        // 넣어 로짓 단계에서 이미 섞어 버리므로 α 를 분리해서 잴 수 없다.
+        const fundPreds = predictRace(cands, stats, rcDist, lib.predict.NO_MARKET_MODEL);
+        const fundByChul = new Map(fundPreds.map((p) => [p.chulNo, p.win]));
+        const fundWin = chulNo.map((c) => fundByChul.get(c) ?? 0);
+
         const oddsList = cands.map((c) => c.winOdds);
         const market = marketProbabilities(oddsList);
 
@@ -267,6 +274,7 @@ async function buildRecords(lib) {
           rcDist,
           chulNo,
           modelWin,
+          fundWin,
           marketWin: market.probs,
           marketUsable: market.usable,
           overround: market.overround,
@@ -429,6 +437,77 @@ function fitPairModel(races, probKey) {
   best.logLikAt1 = pairLogLik(races, probKey, 1, 1);
   best.n = races.filter((r) => r.actual && probsOf(r, probKey)).length;
   return best;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 확률 수준 결합 (Benter 식) — 기본 요인이 시장에 없는 정보를 갖고 있는가
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * p ∝ p_fund^α · p_market^β 로 결합한 승리 확률.
+ *
+ * 왜 이걸 따로 재는가: predict.ts 는 시장을 **요인 하나로** 넣어 로짓 단계에서
+ * 섞는다(가중치 0.489). 그러면 "기본 요인이 시장 위에 무엇을 더했는가"를
+ * 분리해서 잴 수가 없다 — 두 정보원이 이미 한 덩어리다.
+ *
+ * 확률 수준에서 지수를 따로 두면 α 가 그 답을 직접 준다.
+ *   α ≈ 0  → 기본 요인은 시장이 이미 아는 것만 안다. 우위 없음.
+ *   α > 0  → 시장이 놓친 정보가 있다. 그만큼이 우위의 상한이다.
+ * 경마 베팅 문헌(Benter)에서 표준으로 쓰는 2단계 결합이다.
+ */
+function blendProbs(pFund, pMarket, alpha, beta) {
+  const n = pFund.length;
+  const out = new Float64Array(n);
+  let s = 0;
+  for (let i = 0; i < n; i += 1) {
+    const a = Math.pow(Math.max(pFund[i], 1e-9), alpha);
+    const b = Math.pow(Math.max(pMarket[i], 1e-9), beta);
+    out[i] = a * b;
+    s += out[i];
+  }
+  if (s > 0) for (let i = 0; i < n; i += 1) out[i] /= s;
+  return out;
+}
+
+/** 결합 확률의 복승(1·2착) 로그우도. λ·τ 는 1로 고정하고 α·β 만 본다. */
+function blendLogLik(races, alpha, beta) {
+  let ll = 0;
+  let n = 0;
+  for (const r of races) {
+    if (!r.actual) continue;
+    const f = probsOf(r, "fundWin");
+    const m = probsOf(r, "marketWin");
+    if (!f || !m) continue;
+    const ia = r.chulNo.indexOf(r.actual[0]);
+    const ib = r.chulNo.indexOf(r.actual[1]);
+    if (ia < 0 || ib < 0) continue;
+    const p = blendProbs(f, m, alpha, beta);
+    const pairs = dampedHarvillePairs(p, 1, 1);
+    const i = Math.min(ia, ib);
+    const j = Math.max(ia, ib);
+    ll += Math.log(Math.max(pairs[pairIndex(i, j, r.n)], 1e-12));
+    n += 1;
+  }
+  return n ? ll / n : -Infinity;
+}
+
+/** α·β 격자 탐색 + α 의 우도비 검정. */
+function fitBlend(races) {
+  const GRID = [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.7, 0.9, 1.1, 1.4];
+  const BETAS = [0, 0.3, 0.5, 0.7, 0.9, 1.0, 1.1, 1.3, 1.6, 2.0];
+  let best = { alpha: 0, beta: 1, ll: -Infinity };
+  for (const alpha of GRID) {
+    for (const beta of BETAS) {
+      const ll = blendLogLik(races, alpha, beta);
+      if (ll > best.ll) best = { alpha, beta, ll };
+    }
+  }
+  // α=0 (시장만) 대비 우도비. 자유도 1.
+  let bestAt0 = -Infinity;
+  for (const beta of BETAS) bestAt0 = Math.max(bestAt0, blendLogLik(races, 0, beta));
+  const n = races.filter((r) => r.actual && probsOf(r, "fundWin") && probsOf(r, "marketWin")).length;
+  const lr = 2 * n * (best.ll - bestAt0);
+  return { ...best, llMarketOnly: bestAt0, lr, n };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1022,6 +1101,19 @@ async function cmdSearch() {
     fitMarket.lambda < 0.95
       ? `→ λ̂_market < 1: Harville 인기마 편향이 실재한다. quinella.ts 에 반영할 값이다.`
       : `→ λ̂_market ≈ 1: 인기마 편향 보정이 유의하지 않다.`,
+  );
+
+  // ── 확률 수준 결합: 기본 요인이 시장 위에 무엇을 더하는가 ──────────────
+  const blend = fitBlend(fitPool);
+  console.log(`\n=== 기본요인 × 시장 결합 (p ∝ p_fund^α · p_market^β) ===`);
+  console.log(
+    `α̂ ${f2(blend.alpha)}  β̂ ${f2(blend.beta)}  LL ${f4(blend.ll)}  (시장만 α=0: ${f4(blend.llMarketOnly)})  n=${blend.n}`,
+  );
+  console.log(`우도비 검정 (자유도 1): LR = ${blend.lr.toFixed(2)}  ${blend.lr > 3.84 ? "→ p < 0.05" : "→ 유의하지 않음"}`);
+  console.log(
+    blend.alpha > 0 && blend.lr > 3.84
+      ? `→ 기본 요인이 시장에 없는 정보를 갖고 있다. 우위의 상한이 여기서 나온다.`
+      : `→ **기본 요인이 시장 위에 더하는 정보가 없다.** 시장을 이길 재료 자체가 없다는 뜻이다.`,
   );
 
   // ── 기준선 ──────────────────────────────────────────────────────────────
