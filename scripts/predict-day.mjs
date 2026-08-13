@@ -46,7 +46,7 @@ async function main() {
     { prefix: "holpick-predict-" },
   );
   const { predictRace, marketProbabilities } = lib.predict;
-  const { candidateFromRow, EMPTY_TRAITS } = lib.pick;
+  const { candidateFromRow } = lib.pick;
   const { buildStatsBundle, groupRows } = lib.stats;
   const { buildStyleHistory } = lib.style;
   const { buildSectionalHistory } = lib.sectional;
