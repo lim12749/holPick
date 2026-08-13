@@ -330,12 +330,17 @@ function main() {
     const m = meta.get(`${r.date}-${r.rcNo}`);
     r.rank = m?.rank ?? "";
   }
-  const all = recs.races;
   const cls = arg("class", null);
+  // 가중치는 학습 구간에서 적합했다. 그 구간을 포함해 ROI 를 재면 일부가 in-sample 이므로,
+  // `--from` 으로 적합에 쓰이지 않은 구간만 잘라 볼 수 있게 한다.
+  const from = arg("from", null);
+  const all = from ? recs.races.filter((r) => r.date >= from) : recs.races;
   const races = cls ? all.filter((r) => r.rank === cls) : all;
   const months = new Set(races.map((r) => r.month)).size;
 
-  console.log(`대상 ${races.length}경주${cls ? ` (${cls})` : ""} · ${months}개월 · 베팅당 ${STAKE.toLocaleString("ko-KR")}원\n`);
+  console.log(
+    `대상 ${races.length}경주${cls ? ` (${cls})` : ""}${from ? ` · ${from} 이후 (적합 구간 제외)` : ""} · ${months}개월 · 베팅당 ${STAKE.toLocaleString("ko-KR")}원\n`,
+  );
 
   console.log("=== 환급률 재현 (전 조합 매수) ===");
   for (const t of Object.keys(BET_TYPES)) {

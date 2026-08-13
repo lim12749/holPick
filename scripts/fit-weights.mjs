@@ -24,6 +24,22 @@ import { join } from "node:path";
 
 const CACHE = join(process.cwd(), ".cache", "kra");
 
+/**
+ * 어느 승식에 맞출 것인가. 목적함수의 깊이가 곧 승식이다.
+ *   `--objective top1` 단승 · `top2` 복승(기본) · `top3` 연승·복연
+ */
+const OBJECTIVES = { top1: 1, top2: 2, top3: 3 };
+const OBJECTIVE = (() => {
+  const i = process.argv.indexOf("--objective");
+  const name = i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : "top2";
+  if (!(name in OBJECTIVES)) {
+    console.error(`--objective 는 ${Object.keys(OBJECTIVES).join(" | ")} 중 하나여야 한다 (받은 값: ${name})`);
+    process.exit(1);
+  }
+  return name;
+})();
+const DEPTH = OBJECTIVES[OBJECTIVE];
+
 function arg(name, fallback) {
   const i = process.argv.indexOf(`--${name}`);
   return i >= 0 && process.argv[i + 1] ? Number(process.argv[i + 1]) : fallback;
@@ -161,33 +177,48 @@ function softmax(scores) {
 }
 
 /**
- * 복승 로그우도 (Plackett–Luce 상위 2착).
+ * 상위 `depth` 착까지의 Plackett–Luce 로그우도.
  *
- *   P(i 1착, j 2착) = p_i · p_j/(1 − p_i)
+ *   P(1착=a, 2착=b, 3착=c) = p_a · p_b/(1−p_a) · p_c/(1−p_a−p_b)
  *
- * **우승마 우도로 적합하면 안 된다.** 우리 타깃은 복승(2착 이내)인데 목적함수가
- * 우승이면 둘이 갈린다. 실제로 우승 우도로 적합했더니 학습·검증 우도는 좋아지는데
- * 검증 복승 로그손실이 0.4365 → 0.4488 로 나빠졌다. 온도가 1.79 → 2.08 로 올라
- * 우승 예측은 날카로워졌지만 2착 이내 확률은 과신하게 된 것이다.
+ *   depth 1 → 단승 (1착)
+ *   depth 2 → 복승 (1·2착) — 기본값
+ *   depth 3 → 연승·복연 (3착 이내)
  *
- * 순서를 따지므로 1착·2착을 모두 쓴다. 복승은 순서를 안 따지지만, 순서를 지정한
- * 우도가 더 많은 정보를 쓰고 최적해는 같은 방향을 가리킨다.
+ * **승식과 목적함수가 갈리면 손해가 난다.** 처음엔 depth 를 두지 않고 복승 하나로만
+ * 적합했는데, 그전에 우승마 우도(depth 1 에 해당)로 적합했을 때 학습·검증 우승 우도는
+ * 좋아지면서 검증 복승 로그손실이 0.4365 → 0.4488 로 나빠진 기록이 있다. 온도가
+ * 1.79 → 2.08 로 올라 우승 예측은 날카로워지고 2착 이내 확률은 과신하게 된 것이다.
+ * 그래서 승식마다 목적함수를 따로 두고, 채택은 **그 승식의 검증 지표**로만 판단한다.
+ *
+ * 복승·연승은 순서를 따지지 않지만 순서를 지정한 우도가 더 많은 정보를 쓰고 최적해는
+ * 같은 방향을 가리킨다.
  */
-function quinellaLogLik(races, v) {
+function plackettLuceLogLik(races, v, depth) {
   let ll = 0;
   let n = 0;
   for (const race of races) {
-    const first = race.ords.indexOf(1);
-    const second = race.ords.indexOf(2);
-    if (first < 0 || second < 0) continue;
+    const idx = [];
+    for (let k = 1; k <= depth; k += 1) {
+      const i = race.ords.indexOf(k);
+      if (i < 0) break;
+      idx.push(i);
+    }
+    if (idx.length < depth) continue;
+
     const p = softmax(scoresOf(race, v));
-    const pFirst = Math.max(p[first], 1e-12);
-    const rest = Math.max(1 - pFirst, 1e-12);
-    ll += Math.log(pFirst) + Math.log(Math.max(p[second], 1e-12) / rest);
+    let remaining = 1;
+    let acc = 0;
+    for (const i of idx) {
+      acc += Math.log(Math.max(p[i], 1e-12) / Math.max(remaining, 1e-12));
+      remaining -= p[i];
+    }
+    ll += acc;
     n += 1;
   }
   return n ? ll / n : -Infinity;
 }
+
 
 /** 복승 타깃의 Brier / 로그손실. 파라미터 선택에는 쓰지 않고 확인용으로만 본다. */
 function top2Metrics(races, v) {
@@ -213,9 +244,9 @@ function top2Metrics(races, v) {
  * 후보에 0 을 넣어 쓸모없는 요인은 빠질 수 있게 하고, 절대 크기 후보도 함께 넣어
  * 한 번 0 이 된 요인이 되살아날 수 있게 한다 (배수만 쓰면 0 에서 못 빠져나온다).
  */
-function fit(races, start) {
+function fit(races, start, depth = DEPTH) {
   const v = { ...start };
-  let best = quinellaLogLik(races, v);
+  let best = plackettLuceLogLik(races, v, depth);
   const unit = FEATURES.reduce((s, k) => s + start[k], 0) / FEATURES.length;
   const mults = [0.5, 0.7, 0.85, 1.15, 1.4, 2];
   const absolutes = [0, unit * 0.25, unit * 0.5, unit, unit * 2];
@@ -228,7 +259,7 @@ function fit(races, start) {
       for (const cand of [...mults.map((m) => before * m), ...absolutes]) {
         if (cand === bestVal) continue;
         v[k] = cand;
-        const ll = quinellaLogLik(races, v);
+        const ll = plackettLuceLogLik(races, v, depth);
         if (ll > best + 1e-9) {
           best = ll;
           bestVal = cand;
@@ -250,6 +281,7 @@ const splitDate = dates[Math.max(1, Math.floor(dates.length * warmup))];
 const train = races.filter((r) => r.date < splitDate);
 const test = races.filter((r) => r.date >= splitDate);
 
+console.log(`목적함수 ${OBJECTIVE} (상위 ${DEPTH}착 Plackett–Luce) — ${{ top1: "단승", top2: "복승", top3: "연승·복연" }[OBJECTIVE]}`);
 console.log(`경주일 ${dates.length}일 · 경주 ${races.length}개`);
 console.log(`학습 ${train.length}경주 (~${splitDate} 이전) / 검증 ${test.length}경주`);
 console.log(
@@ -279,12 +311,14 @@ const scaleNm = FEATURES.reduce((s, k) => s + fitNoMarket.v[k], 0);
 const weightsNm = Object.fromEntries(FEATURES.map((k) => [k, fitNoMarket.v[k] / scaleNm]));
 
 const show = (label, vec) => {
-  const tr = quinellaLogLik(train, vec);
-  const te = quinellaLogLik(test, vec);
+  // 목적함수 LL 과 함께 **복승 지표를 항상 같이** 찍는다. 목적함수를 바꾸면 그쪽 LL 은
+  // 당연히 좋아지므로, 다른 승식 지표가 얼마나 희생됐는지 보이지 않으면 판단할 수 없다.
+  const tr = plackettLuceLogLik(train, vec, DEPTH);
+  const te = plackettLuceLogLik(test, vec, DEPTH);
   const m = top2Metrics(test, vec);
   console.log(
-    `${label.padEnd(12)} 학습 복승LL ${tr.toFixed(4)} · 검증 복승LL ${te.toFixed(4)} · ` +
-      `검증 Brier ${m.brier.toFixed(4)} · 검증 logLoss ${m.logLoss.toFixed(4)}`,
+    `${label.padEnd(12)} 학습 ${OBJECTIVE}LL ${tr.toFixed(4)} · 검증 ${OBJECTIVE}LL ${te.toFixed(4)} · ` +
+      `검증 복승Brier ${m.brier.toFixed(4)} · 검증 복승logLoss ${m.logLoss.toFixed(4)}`,
   );
 };
 
