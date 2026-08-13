@@ -25,10 +25,23 @@ export interface RaceResult {
   winOdds: number;
   /** 연승 배당률. */
   plcOdds: number;
-  /** 마체중 표기 ("481(+3)"). */
+  /**
+   * 마체중 표기 ("481(+3)"). 시행 전에는 `"0()"` 로 온다 — 경주 당일 계측이라
+   * 경주 전에는 값이 없다. 그래서 예측 입력이 아니라 표시·분석용으로만 쓴다.
+   */
   wgHr: string;
   wgBudam: number;
   rating: number;
+  /**
+   * 연령·성별·산지.
+   *
+   * 지난 경주일은 출전표가 조회되지 않으므로, 이 값들이 없으면 과거 경주의 예측을
+   * 재현할 때 해당 요인이 통째로 빠진다. 경주기록에도 채움률 100% 로 들어오므로
+   * 여기서 함께 파싱한다.
+   */
+  age: number;
+  sex: string;
+  origin: string;
 }
 
 /** 경주 단위 정보 중 결과 응답에만 있는 것 (주로상태·날씨). */
@@ -60,6 +73,10 @@ export function parseResult(row: KraRow): RaceResult {
     wgHr: str(row.wgHr),
     wgBudam: num(row.wgBudam),
     rating: num(row.rating),
+    age: num(row.age),
+    sex: str(row.sex),
+    // 경주기록은 산지를 `name`, 출전표는 `prd` 로 준다.
+    origin: str(row.name),
   };
 }
 
