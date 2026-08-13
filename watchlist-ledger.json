@@ -1,0 +1,109 @@
+{
+ "picks": [
+  {
+   "date": "20260815",
+   "rcNo": 1,
+   "rank": "국6등급",
+   "dist": 1000,
+   "runners": 10,
+   "pair": "2-5",
+   "names": [
+    "라온폴리스",
+    "화이트선더"
+   ],
+   "leadProb": 0.07017089718516709,
+   "stake": 1000,
+   "payout": null
+  },
+  {
+   "date": "20260815",
+   "rcNo": 2,
+   "rank": "국6등급",
+   "dist": 1400,
+   "runners": 11,
+   "pair": "5-6",
+   "names": [
+    "더퀸로즈",
+    "원더풀다르샨"
+   ],
+   "leadProb": 0.05043943793975116,
+   "stake": 1000,
+   "payout": null
+  },
+  {
+   "date": "20260815",
+   "rcNo": 3,
+   "rank": "국6등급",
+   "dist": 1300,
+   "runners": 11,
+   "pair": "1-5",
+   "names": [
+    "미스터카이",
+    "비카델라"
+   ],
+   "leadProb": 0.1399754323901367,
+   "stake": 1000,
+   "payout": null
+  },
+  {
+   "date": "20260816",
+   "rcNo": 1,
+   "rank": "국6등급",
+   "dist": 1200,
+   "runners": 9,
+   "pair": "8-9",
+   "names": [
+    "이클립스골든",
+    "지비에이스"
+   ],
+   "leadProb": 0.06357045731891675,
+   "stake": 1000,
+   "payout": null
+  },
+  {
+   "date": "20260816",
+   "rcNo": 2,
+   "rank": "국6등급",
+   "dist": 1300,
+   "runners": 11,
+   "pair": "6-10",
+   "names": [
+    "지산포에버",
+    "삼정여제"
+   ],
+   "leadProb": 0.0500795213806801,
+   "stake": 1000,
+   "payout": null
+  },
+  {
+   "date": "20260817",
+   "rcNo": 1,
+   "rank": "국6등급",
+   "dist": 1000,
+   "runners": 11,
+   "pair": "1-4",
+   "names": [
+    "샤프가이",
+    "삼정퍼스트"
+   ],
+   "leadProb": 0.04629920172963799,
+   "stake": 1000,
+   "payout": null
+  },
+  {
+   "date": "20260817",
+   "rcNo": 2,
+   "rank": "국6등급",
+   "dist": 1200,
+   "runners": 11,
+   "pair": "8-11",
+   "names": [
+    "라온더리펀",
+    "스터닝스킷"
+   ],
+   "leadProb": 0.07771823646974382,
+   "stake": 1000,
+   "payout": null
+  }
+ ]
+}

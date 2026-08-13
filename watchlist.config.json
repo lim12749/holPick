@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "frozenAt": "2026-08-13",
+  "forwardTestFrom": "20260814",
+  "note": "이 설정은 2023-09~2026-08 데이터에서 발견됐다. forwardTestFrom 이전 경주는 발견에 쓰인 구간이므로 전향 검정에 넣지 않는다. 임계값을 다시 계산하지 말 것 — 고정된 값이어야 검정이 깨끗하다.",
+  "strategy": {
+    "name": "국6등급 저확신 복승",
+    "betType": "복승",
+    "picksPerRace": 1,
+    "stake": 1000,
+    "gates": {
+      "rank": "국6등급",
+      "leadPairProbBelow": 0.173181
+    }
+  },
+  "discovery": {
+    "grid": 1152,
+    "evaluated": 559,
+    "trainRoi": 1.516,
+    "trainBets": 200,
+    "testRoi": 1.5598,
+    "testBets": 92,
+    "testCi": [1.02, 2.11],
+    "testRoiExcludingBest": 1.4304,
+    "testRoiExcludingTop5": 1.2135,
+    "monthsPositive": "9/12",
+    "permutationP": 0.1262,
+    "permutationNullQ95": 3.548,
+    "trainTestCorrelation": 0.26,
+    "verdict": "미확정. 개별 강건성 검사는 통과했으나 선택 절차를 포함한 순열 귀무에서 p=0.13 으로 노이즈와 구분되지 않는다. 전향 검정으로만 판정 가능."
+  },
+  "baseline": {
+    "quinellaPayback": 0.6735,
+    "allRacesQuinellaRoi": 0.8859,
+    "placeRoi": 0.8836
+  }
+}
