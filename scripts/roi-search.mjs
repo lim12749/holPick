@@ -1198,11 +1198,26 @@ async function cmdHoldout() {
   console.log(`ROI ${f4(res.roi)}  부트스트랩 CI [${f2(ci.lo)}, ${f2(ci.hi)}]`);
   console.log(`최고배당 제외 ROI ${f4(roiExcludingBest(cols, res.betIdx))}`);
 
+  // 신뢰구간이 통째로 본전 아래면 "판단 불가"가 아니라 명백히 진 것이다.
+  // 이 구분을 빼 두면 확실한 손실을 "모르겠다"로 적어 두게 된다.
   const verdict =
-    ci.lo > TARGET_ROI ? `이김 (≥${TARGET_ROI})` : ci.lo > 1.0 ? "이김 (>본전)" : "판단 불가";
+    ci.lo > TARGET_ROI
+      ? `이김 (≥${TARGET_ROI})`
+      : ci.lo > 1.0
+        ? "이김 (>본전)"
+        : ci.hi < 1.0
+          ? "짐 (본전 미만 확정)"
+          : "판단 불가";
   console.log(`\n판정: ${verdict}`);
   if (verdict === "판단 불가") {
-    console.log(`  신뢰구간이 목표를 감싼다. 표본으로는 이 전략이 목표에 닿는지 알 수 없다.`);
+    console.log(`  신뢰구간이 본전을 걸친다. 표본으로는 이기는지 지는지 알 수 없다.`);
+  } else if (verdict.startsWith("짐")) {
+    console.log(`  신뢰구간 상한(${f2(ci.hi)})이 본전에 못 미친다. 이 전략은 잃는다.`);
+    if (res.roi < frozen.payback) {
+      console.log(
+        `  환급률 ${f4(frozen.payback)} 보다도 낮다 — 전 조합을 무작위로 사는 것만도 못하다.`,
+      );
+    }
   }
 
   console.log(`\n월별:`);
